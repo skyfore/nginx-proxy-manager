@@ -42,6 +42,7 @@ const model = {
 				expansion = value;
 				return query;
 			},
+			// biome-ignore lint/suspicious/noThenProperty: Objection query builders are intentionally thenable.
 			then: (fn) => Promise.resolve(structuredClone(selected)).then(fn),
 		};
 		return query;
