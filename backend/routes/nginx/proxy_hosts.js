@@ -72,6 +72,27 @@ router
 	});
 
 /**
+ * GET /api/nginx/proxy-hosts/directory
+ * Keep this literal route before /:host_id.
+ */
+router
+	.route("/directory")
+	.options((_, res) => {
+		res.sendStatus(204);
+	})
+	.all(jwtdecode())
+	.get(async (req, res, next) => {
+		try {
+			const rows = await internalProxyHost.getDirectory(res.locals.access);
+			res.set("Cache-Control", "no-store");
+			res.status(200).send(rows);
+		} catch (err) {
+			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			next(err);
+		}
+	});
+
+/**
  * Specific proxy-host
  *
  * /api/nginx/proxy-hosts/123
