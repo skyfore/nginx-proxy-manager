@@ -168,6 +168,11 @@
 				"$ref": "./paths/nginx/proxy-hosts/post.json"
 			}
 		},
+		"/nginx/proxy-hosts/directory": {
+			"get": {
+				"$ref": "./paths/nginx/proxy-hosts/directory/get.json"
+			}
+		},
 		"/nginx/proxy-hosts/{hostID}": {
 			"get": {
 				"$ref": "./paths/nginx/proxy-hosts/hostID/get.json"
