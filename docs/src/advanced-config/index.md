@@ -4,6 +4,11 @@ outline: deep
 
 # Advanced Configuration
 
+## Service directory API
+
+Build a custom homepage with the authenticated [service directory API](./service-directory.md),
+which returns visible proxy-host names and links without raw configuration.
+
 ## Running processes as a user/group
 
 By default, the services (nginx etc) will run as `root` user inside the docker container.
