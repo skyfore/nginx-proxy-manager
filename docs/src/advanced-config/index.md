@@ -4,10 +4,10 @@ outline: deep
 
 # Advanced Configuration
 
-## Service directory API
+## Personal API tokens
 
-Build a custom homepage with the authenticated [service directory API](./service-directory.md),
-which returns visible proxy-host names and links without raw configuration.
+Use [personal API tokens](./api-tokens.md) to give integrations scoped, expiring,
+revocable access to the existing NPM resource APIs.
 
 ## Running processes as a user/group
 
