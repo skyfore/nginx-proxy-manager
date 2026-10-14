@@ -1,7 +1,6 @@
-import express from "express";
 import fs from "node:fs";
+import express from "express";
 import internalProxyHost from "../../internal/proxy-host.js";
-import errs from "../../lib/error.js";
 import jwtdecode from "../../lib/express/jwt-decode.js";
 import apiValidator from "../../lib/validator/api.js";
 import validator from "../../lib/validator/index.js";
@@ -13,34 +12,6 @@ const router = express.Router({
 	strict: true,
 	mergeParams: true,
 });
-
-// Preserve legacy authentication behavior on existing endpoints. The directory
-// documents invalid/expired tokens as 401, without exposing JWT diagnostics.
-const decodeDirectoryToken = jwtdecode();
-const invalidDirectoryTokenMessages = new Set([
-	"jwt must be provided",
-	"jwt must be a string",
-	"jwt malformed",
-	"invalid token",
-	"jwt signature is required",
-	"invalid algorithm",
-	"invalid signature",
-	"invalid nbf value",
-	"invalid exp value",
-]);
-const directoryAuthentication = (req, res, next) =>
-	decodeDirectoryToken(req, res, (err) => {
-		if (
-			err &&
-			((err.name === "JsonWebTokenError" && invalidDirectoryTokenMessages.has(err.message)) ||
-				["NotBeforeError", "TokenExpiredError"].includes(err.name) ||
-				(err instanceof errs.AuthError && err.message === "Token has expired"))
-		) {
-			next(Object.assign(new Error("Invalid or expired authentication"), { status: 401, public: true }));
-			return;
-		}
-		next(err);
-	});
 
 /**
  * /api/nginx/proxy-hosts
@@ -79,7 +50,7 @@ router
 			const rows = await internalProxyHost.getAll(res.locals.access, data.expand, data.query);
 			res.status(200).send(rows);
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest) debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
 			next(err);
 		}
 	})
@@ -95,28 +66,8 @@ router
 			const result = await internalProxyHost.create(res.locals.access, payload);
 			res.status(201).send(result);
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err} ${JSON.stringify(err.debug, null, 2)}`);
-			next(err);
-		}
-	});
-
-/**
- * GET /api/nginx/proxy-hosts/directory
- * Keep this literal route before /:host_id.
- */
-router
-	.route("/directory")
-	.options((_, res) => {
-		res.sendStatus(204);
-	})
-	.all(directoryAuthentication)
-	.get(async (req, res, next) => {
-		try {
-			const rows = await internalProxyHost.getDirectory(res.locals.access);
-			res.set("Cache-Control", "no-store");
-			res.status(200).send(rows);
-		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest)
+				debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err} ${JSON.stringify(err.debug, null, 2)}`);
 			next(err);
 		}
 	});
@@ -164,7 +115,7 @@ router
 			});
 			res.status(200).send(row);
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest) debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
 			next(err);
 		}
 	})
@@ -181,7 +132,7 @@ router
 			const result = await internalProxyHost.update(res.locals.access, payload);
 			res.status(200).send(result);
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest) debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
 			next(err);
 		}
 	})
@@ -198,7 +149,7 @@ router
 			});
 			res.status(200).send(result);
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest) debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
 			next(err);
 		}
 	});
@@ -225,7 +176,7 @@ router
 			});
 			res.status(200).send(result);
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest) debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
 			next(err);
 		}
 	});
@@ -252,7 +203,7 @@ router
 			});
 			res.status(200).send(result);
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest) debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
 			next(err);
 		}
 	});
@@ -318,7 +269,7 @@ router
 
 			res.status(200).send({ logs });
 		} catch (err) {
-			debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
+			if (!res.locals.apiTokenRequest) debug(logger, `${req.method.toUpperCase()} ${req.path}: ${err}`);
 			next(err);
 		}
 	});
