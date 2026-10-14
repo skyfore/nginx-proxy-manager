@@ -3,7 +3,7 @@
 	"info": {
 		"title": "Nginx Proxy Manager API",
 		"version": "2.x.x",
-		"description": "This is the official API documentation for Nginx Proxy Manager.\n\nMost endpoints require authentication via Bearer Token (JWT). You can generate a token by logging in via the `POST /tokens` endpoint.\n\nFor more information, visit the [Nginx Proxy Manager Documentation](https://nginxproxymanager.com)."
+		"description": "This is the official API documentation for Nginx Proxy Manager.\n\nMost endpoints require Bearer authentication. Log in via `POST /tokens` for a user JWT. Scoped personal API tokens can call supported existing resource endpoints; token management requires a normal login JWT.\n\nFor more information, visit the [Nginx Proxy Manager Documentation](https://nginxproxymanager.com)."
 	},
 	"servers": [
 		{
