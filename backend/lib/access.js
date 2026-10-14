@@ -12,19 +12,46 @@ import { fileURLToPath } from "node:url";
 import Ajv from "ajv/dist/2020.js";
 import _ from "lodash";
 import { access as logger } from "../logger.js";
+import accessListModel from "../models/access_list.js";
 import authModel from "../models/auth.js";
+import certificateModel from "../models/certificate.js";
+import deadHostModel from "../models/dead_host.js";
 import proxyHostModel from "../models/proxy_host.js";
+import redirectionHostModel from "../models/redirection_host.js";
+import streamModel from "../models/stream.js";
 import TokenModel from "../models/token.js";
 import userModel from "../models/user.js";
 import permsSchema from "./access/permissions.json" with { type: "json" };
 import roleSchema from "./access/roles.json" with { type: "json" };
+import { loadApiToken } from "./api-token-auth.js";
+import { permits, tokenPrefix } from "./api-token-policy.js";
 import errs from "./error.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default function (tokenString) {
-	const Token = TokenModel();
+	const isApiToken = typeof tokenString === "string" && tokenString.startsWith(tokenPrefix);
+	let apiToken = null;
+	let apiPayload = null;
+	const Token = isApiToken
+		? {
+				load: async () => {
+					if (!apiToken) {
+						apiToken = await loadApiToken(tokenString);
+						apiPayload = {
+							attrs: { id: apiToken.owner_user_id },
+							scope: ["user"],
+							iat: Math.floor(new Date(apiToken.created_on).getTime() / 1000),
+						};
+					}
+					return apiPayload;
+				},
+				get: (key) => apiPayload?.[key] ?? null,
+				getUserId: (fallback = 0) => apiPayload?.attrs.id || fallback,
+				hasScope: (scope) => scope === "user",
+			}
+		: TokenModel();
 	let tokenData = null;
 	let initialised = false;
 	const objectCache = {};
@@ -100,6 +127,9 @@ export default function (tokenString) {
 				initialised = true;
 				userRoles = user.roles;
 				permissions = user.permissions;
+				if (isApiToken && apiToken.visibility !== "all") {
+					permissions = { ...permissions, visibility: "user" };
+				}
 			} else {
 				throw new errs.AuthError("User cannot be loaded for Token");
 			}
@@ -212,6 +242,8 @@ export default function (tokenString) {
 
 	return {
 		token: Token,
+		credentialKind: isApiToken ? "api_token" : "jwt",
+		getApiTokenId: () => apiToken?.id ?? null,
 
 		/**
 		 *
@@ -220,7 +252,9 @@ export default function (tokenString) {
 		 */
 		load: async (allowInternal) => {
 			if (tokenString) {
-				return await Token.load(tokenString);
+				const loaded = await Token.load(tokenString);
+				if (isApiToken) await this.init();
+				return loaded;
 			}
 			allowInternalAccess = allowInternal;
 			return allowInternal || null;
@@ -241,6 +275,38 @@ export default function (tokenString) {
 
 			try {
 				await this.init();
+				if (isApiToken) {
+					const [resource, action] = permission.split(":");
+					const read = ["get", "list"].includes(action);
+					if (
+						(!read && !["create", "update", "delete"].includes(action)) ||
+						!permits(apiToken.scopes, resource, read ? "read" : "write")
+					) {
+						throw new errs.PermissionError("Permission Denied");
+					}
+					// Enforce ownership for every resource, even admin-owned PATs.
+					// Several legacy permission schemas do not enforce object IDs.
+					const id = typeof data === "object" && data ? data.id : data;
+					if (action !== "create" && id !== undefined && id !== null) {
+						const models = {
+							proxy_hosts: proxyHostModel,
+							redirection_hosts: redirectionHostModel,
+							dead_hosts: deadHostModel,
+							streams: streamModel,
+							access_lists: accessListModel,
+							certificates: certificateModel,
+						};
+						if (!Number.isSafeInteger(Number(id)) || Number(id) < 1)
+							throw new errs.PermissionError("Permission Denied");
+						const row = await models[resource].query().findById(Number(id)).where("is_deleted", 0);
+						if (
+							!row ||
+							(permissions.visibility !== "all" && row.owner_user_id !== apiToken.owner_user_id)
+						) {
+							throw new errs.PermissionError("Permission Denied");
+						}
+					}
+				}
 				const objectSchema = await this.getObjectSchema(permission);
 
 				const dataSchema = {
@@ -284,7 +350,7 @@ export default function (tokenString) {
 			} catch (err) {
 				err.permission = permission;
 				err.permission_data = data;
-				logger.error(permission, data, err.message);
+				logger.error(permission, isApiToken ? "[API token request]" : data, err.message);
 				// A revoked token is not a permission problem, and the client can tell: the frontend
 				// clears the session on a 401 and on nothing else.
 				if (err instanceof errs.TokenRevokedError) {
