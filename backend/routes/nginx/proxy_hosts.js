@@ -1,6 +1,7 @@
 import express from "express";
 import fs from "node:fs";
 import internalProxyHost from "../../internal/proxy-host.js";
+import errs from "../../lib/error.js";
 import jwtdecode from "../../lib/express/jwt-decode.js";
 import apiValidator from "../../lib/validator/api.js";
 import validator from "../../lib/validator/index.js";
@@ -12,6 +13,34 @@ const router = express.Router({
 	strict: true,
 	mergeParams: true,
 });
+
+// Preserve legacy authentication behavior on existing endpoints. The directory
+// documents invalid/expired tokens as 401, without exposing JWT diagnostics.
+const decodeDirectoryToken = jwtdecode();
+const invalidDirectoryTokenMessages = new Set([
+	"jwt must be provided",
+	"jwt must be a string",
+	"jwt malformed",
+	"invalid token",
+	"jwt signature is required",
+	"invalid algorithm",
+	"invalid signature",
+	"invalid nbf value",
+	"invalid exp value",
+]);
+const directoryAuthentication = (req, res, next) =>
+	decodeDirectoryToken(req, res, (err) => {
+		if (
+			err &&
+			((err.name === "JsonWebTokenError" && invalidDirectoryTokenMessages.has(err.message)) ||
+				["NotBeforeError", "TokenExpiredError"].includes(err.name) ||
+				(err instanceof errs.AuthError && err.message === "Token has expired"))
+		) {
+			next(Object.assign(new Error("Invalid or expired authentication"), { status: 401, public: true }));
+			return;
+		}
+		next(err);
+	});
 
 /**
  * /api/nginx/proxy-hosts
@@ -80,7 +109,7 @@ router
 	.options((_, res) => {
 		res.sendStatus(204);
 	})
-	.all(jwtdecode())
+	.all(directoryAuthentication)
 	.get(async (req, res, next) => {
 		try {
 			const rows = await internalProxyHost.getDirectory(res.locals.access);
