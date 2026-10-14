@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { after, before, mock, test } from "node:test";
 import express from "express";
+import errs from "../lib/error.js";
 
 const host = (overrides = {}) => ({
 	id: 1,
@@ -92,6 +93,25 @@ mock.module("../lib/access.js", {
 			this.tokenString = token;
 		}
 		async load() {
+			const serverKeyErrors = {
+				"missing-key": "secret or public key must be provided",
+				"invalid-key": "secretOrPublicKey is not valid key material",
+				"wrong-key-type": "secretOrPublicKey must be an asymmetric key when using RS256",
+			};
+			if (serverKeyErrors[this.tokenString]) {
+				throw Object.assign(new Error(serverKeyErrors[this.tokenString]), { name: "JsonWebTokenError" });
+			}
+			if (["malformed", "tampered", "not-yet-valid"].includes(this.tokenString)) {
+				throw Object.assign(new Error(this.tokenString === "tampered" ? "invalid signature" : "jwt malformed"), {
+					name: this.tokenString === "not-yet-valid" ? "NotBeforeError" : "JsonWebTokenError",
+				});
+			}
+			if (this.tokenString === "expired") {
+				throw new errs.AuthError("Token has expired");
+			}
+			if (this.tokenString === "internal-error") {
+				throw new Error("unrelated internal failure");
+			}
 			if (!this.tokenString || this.tokenString === "invalid") {
 				throw Object.assign(new Error("Permission Denied"), { status: 403 });
 			}
@@ -128,4 +148,18 @@ test("literal directory route is authenticated, not treated as host_id", async (
 	assert.deepEqual(await response.json(), [
 		{ id: 1, domain_names: ["app.example.com"], urls: ["http://app.example.com"] },
 	]);
+});
+
+test("directory normalizes only known JWT errors and preserves legacy routes", async () => {
+	for (const token of ["malformed", "tampered", "expired", "not-yet-valid"]) {
+		const response = await fetch(base, { headers: { Authorization: token } });
+		assert.equal(response.status, 401);
+		assert.deepEqual(await response.json(), { error: "Invalid or expired authentication" });
+	}
+	for (const token of ["internal-error", "missing-key", "invalid-key", "wrong-key-type"]) {
+		const failure = await fetch(base, { headers: { Authorization: token } });
+		assert.equal(failure.status, 500, "server failures must not be disguised as authentication failures");
+	}
+	const legacy = await fetch(base.replace(/\/directory$/, ""), { headers: { Authorization: "malformed" } });
+	assert.equal(legacy.status, 500, "the existing list route retains its authentication behavior");
 });
