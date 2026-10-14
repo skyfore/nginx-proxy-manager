@@ -168,11 +168,6 @@
 				"$ref": "./paths/nginx/proxy-hosts/post.json"
 			}
 		},
-		"/nginx/proxy-hosts/directory": {
-			"get": {
-				"$ref": "./paths/nginx/proxy-hosts/directory/get.json"
-			}
-		},
 		"/nginx/proxy-hosts/{hostID}": {
 			"get": {
 				"$ref": "./paths/nginx/proxy-hosts/hostID/get.json"
@@ -375,6 +370,24 @@
 		"/users/{userID}/login": {
 			"post": {
 				"$ref": "./paths/users/userID/login/post.json"
+			}
+		},
+		"/api-tokens": {
+			"get": {
+				"$ref": "./paths/api-tokens/get.json"
+			},
+			"post": {
+				"$ref": "./paths/api-tokens/post.json"
+			}
+		},
+		"/api-tokens/options": {
+			"get": {
+				"$ref": "./paths/api-tokens/options/get.json"
+			}
+		},
+		"/api-tokens/{tokenID}": {
+			"delete": {
+				"$ref": "./paths/api-tokens/tokenID/delete.json"
 			}
 		}
 	}
