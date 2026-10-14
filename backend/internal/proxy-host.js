@@ -1,7 +1,6 @@
 import _ from "lodash";
 import errs from "../lib/error.js";
 import { castJsonIfNeed } from "../lib/helpers.js";
-import toDirectory from "../lib/proxy-host-directory.js";
 import utils from "../lib/utils.js";
 import proxyHostModel from "../models/proxy_host.js";
 import internalAuditLog from "./audit-log.js";
@@ -447,15 +446,6 @@ const internalProxyHost = {
 			return internalHost.cleanAllRowsCertificateMeta(rows);
 		}
 		return rows;
-	},
-
-	/**
-	 * Directory entries for enabled hosts visible to the current user.
-	 * Reuse list authorization, ownership and soft-deletion rules.
-	 */
-	getDirectory: async (access) => {
-		const rows = await internalProxyHost.getAll(access, ["certificate"]);
-		return toDirectory(rows);
 	},
 
 	/**
