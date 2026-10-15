@@ -217,7 +217,7 @@ const internalNginx = {
 
 		await internalNginx.loadRenderRelations(nice_host_type, host);
 
-		debug(logger, `Generating ${nice_host_type} Config:`, JSON.stringify(host, null, 2));
+		debug(logger, `Generating ${nice_host_type} Config:`, host.id);
 
 		const renderEngine = utils.getRenderEngine();
 
@@ -279,26 +279,28 @@ const internalNginx = {
 			// Set the IPv6 setting for the host
 			host.ipv6 = internalNginx.ipv6Enabled();
 
-			locationsPromise.then(() => {
-				renderEngine
-					.parseAndRender(template, host)
-					.then((config_text) => {
-						fs.writeFileSync(filename, config_text, { encoding: "utf8" });
-						debug(logger, "Wrote config:", filename, config_text);
+			locationsPromise
+				.then(() => {
+					renderEngine
+						.parseAndRender(template, host)
+						.then((config_text) => {
+							fs.writeFileSync(filename, config_text, { encoding: "utf8" });
+							debug(logger, "Wrote config:", filename);
 
-						// Restore locations array
-						host.locations = origLocations;
+							// Restore locations array
+							host.locations = origLocations;
 
-						resolve(true);
-					})
-					.catch((err) => {
-						debug(logger, `Could not write ${filename}:`, err.message);
-						reject(new errs.ConfigurationError(err.message));
-					});
-			}).catch((err) => {
-				debug(logger, `Could not render locations for ${filename}:`, err.message);
-				reject(new errs.ConfigurationError(err.message));
-			});
+							resolve(true);
+						})
+						.catch((err) => {
+							debug(logger, `Could not write ${filename}:`, err.message);
+							reject(new errs.ConfigurationError(err.message));
+						});
+				})
+				.catch((err) => {
+					debug(logger, `Could not render locations for ${filename}:`, err.message);
+					reject(new errs.ConfigurationError(err.message));
+				});
 		});
 	},
 
@@ -358,7 +360,7 @@ const internalNginx = {
 	 * @returns {Promise}
 	 */
 	generateLetsEncryptRequestConfig: (certificate) => {
-		debug(logger, "Generating LetsEncrypt Request Config:", certificate);
+		debug(logger, "Generating LetsEncrypt Request Config:", certificate.id);
 		const renderEngine = utils.getRenderEngine();
 
 		return new Promise((resolve, reject) => {
@@ -378,7 +380,7 @@ const internalNginx = {
 				.parseAndRender(template, certificate)
 				.then((config_text) => {
 					fs.writeFileSync(filename, config_text, { encoding: "utf8" });
-					debug(logger, "Wrote config:", filename, config_text);
+					debug(logger, "Wrote config:", filename);
 					resolve(true);
 				})
 				.catch((err) => {
