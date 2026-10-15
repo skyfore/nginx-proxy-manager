@@ -288,7 +288,7 @@ def main():
     require(fetched.get("advanced_config") == "", "Denied configuration update changed the host")
     updated = api("PUT", host_path, token=pat,
                   body={"domain_names": [HOST, ALIAS], "allow_websocket_upgrade": True})
-    require(updated.get("domain_names") == [HOST, ALIAS] and updated.get("allow_websocket_upgrade") is True,
+    require(updated.get("domain_names") == sorted([HOST, ALIAS]) and updated.get("allow_websocket_upgrade") is True,
             "PAT update did not persist the changed proxy host")
     wait_proxy(ALIAS, True)
     wait_proxy(HOST, True)
