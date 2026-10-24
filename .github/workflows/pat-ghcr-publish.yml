@@ -61,7 +61,7 @@ jobs:
           python3 - <<'PY'
           import json, os, sys, urllib.error, urllib.request
 
-          def read_api(path):
+          def read_api(path, *, allow_package_bootstrap=False):
               req = urllib.request.Request(
                   'https://api.github.com/' + path,
                   headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
@@ -71,7 +71,12 @@ jobs:
                   with urllib.request.urlopen(req, timeout=30) as response:
                       return json.load(response)
               except urllib.error.HTTPError as error:
-                  # In particular, 404 is not proof of absence: it may mean no access.
+                  # A package 404 is ambiguous, not a denied registry write.
+                  # The owner authorized a new package at this exact namespace.
+                  # Try only a unique new tag with this repo's ephemeral token;
+                  # GHCR enforces access. Never retry a denied registry push.
+                  if error.code == 404 and allow_package_bootstrap:
+                      return None
                   sys.exit(f'::error::Package/repository preflight returned HTTP {error.code}; '
                            'refusing publication because ownership/access is unverified. '
                            'Do not add a long-lived token or infer absence from a public listing.')
@@ -79,23 +84,30 @@ jobs:
                   sys.exit('::error::Package/repository preflight could not be verified; no publication.')
 
           repo = read_api('repos/skyfore/nginx-proxy-manager')
-          package = read_api('users/skyfore/packages/container/nginx-proxy-manager')
           expected_id = os.environ['EXPECTED_REPOSITORY_ID']
-          if not (str(repo.get('id')) == expected_id
-                  and repo.get('full_name') == 'skyfore/nginx-proxy-manager'
-                  and package.get('package_type') == 'container'
-                  and package.get('name') == 'nginx-proxy-manager'
-                  and package.get('owner', {}).get('login') == 'skyfore'
-                  and str((package.get('repository') or {}).get('id')) == expected_id):
-              sys.exit('::error::Existing package is not verified as linked to the exact source repository; no publication.')
-          visibility = package.get('visibility')
-          if visibility not in ('public', 'private'):
-              sys.exit('::error::Unexpected package visibility; no publication.')
-          print('Authenticated package ownership and repository link verified.')
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write(f'Existing GHCR package verified. Visibility: {visibility}.\n')
-              if visibility != 'public':
-                  summary.write('Publishing will not change visibility. Public access requires a separate authorized change and anonymous-pull verification.\n')
+          if not (expected_id == '1415905491' and str(repo.get('id')) == expected_id
+                  and repo.get('full_name') == 'skyfore/nginx-proxy-manager'):
+              sys.exit('::error::Source repository identity mismatch; no publication.')
+          package = read_api('users/skyfore/packages/container/nginx-proxy-manager',
+                             allow_package_bootstrap=True)
+          if package is None:
+              print('Package metadata returned 404. Attempting authorized first publication with a unique tag; GHCR will enforce repository-token access.')
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write('Package existence is unconfirmed (404). Authorized bootstrap will use only the exact namespace, a unique trial tag and the ephemeral repository token. No visibility or access changes.\n')
+          else:
+              if not (package.get('package_type') == 'container'
+                      and package.get('name') == 'nginx-proxy-manager'
+                      and package.get('owner', {}).get('login') == 'skyfore'
+                      and str((package.get('repository') or {}).get('id')) == expected_id):
+                  sys.exit('::error::Existing package is not verified as linked to the exact source repository; no publication.')
+              visibility = package.get('visibility')
+              if visibility not in ('public', 'private'):
+                  sys.exit('::error::Unexpected package visibility; no publication.')
+              print('Authenticated package ownership and repository link verified.')
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write(f'Existing GHCR package verified. Visibility: {visibility}.\n')
+                  if visibility != 'public':
+                      summary.write('Publishing will not change visibility. Public access requires a separate authorized change and anonymous-pull verification.\n')
           PY
       - name: Publish unique trial tag with ephemeral job token
         id: publish
