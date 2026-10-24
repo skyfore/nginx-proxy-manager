@@ -1,0 +1,203 @@
+name: PAT GHCR trial publication
+
+# One-shot trial on PR #1's branch, not a release or a default-branch publisher.
+# Only intentional edits to this workflow trigger another uniquely tagged trial.
+on:
+  push:
+    branches: [feat/proxy-host-directory-api]
+    paths: [.github/workflows/pat-ghcr-publish.yml]
+
+permissions: {}
+concurrency:
+  group: pat-ghcr-trial
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/skyfore/nginx-proxy-manager
+  SOURCE_COMMIT: 144e502d7a67b4ba00d61cf7fde802c2735bcb3d
+
+jobs:
+  publish:
+    if: github.repository == 'skyfore/nginx-proxy-manager' && github.ref == 'refs/heads/feat/proxy-host-directory-api'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+      tag: ${{ steps.publish.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+          persist-credentials: false
+      - name: Verify pinned source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+      - name: Build and test frontend using official project script
+        timeout-minutes: 12
+        run: bash scripts/ci/frontend-build
+      - name: Build and locally test production image before publication
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --load \
+            -t npm-pat-local:test -f docker/Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/skyfore/nginx-proxy-manager \
+            --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+            --build-arg BUILD_VERSION=pat-ghcr-trial \
+            --build-arg "BUILD_COMMIT=$SOURCE_COMMIT" \
+            --build-arg BUILD_DATE="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" .
+          docker run --rm --network none --entrypoint sh npm-pat-local:test -c \
+            'node --test test/api-token-policy.test.js'
+      - name: Authenticate and verify existing package belongs to this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, sys, urllib.error, urllib.request
+
+          def read_api(path):
+              req = urllib.request.Request(
+                  'https://api.github.com/' + path,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json',
+                           'X-GitHub-Api-Version': '2022-11-28'})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  # In particular, 404 is not proof of absence: it may mean no access.
+                  sys.exit(f'::error::Package/repository preflight returned HTTP {error.code}; '
+                           'refusing publication because ownership/access is unverified. '
+                           'Do not add a long-lived token or infer absence from a public listing.')
+              except (urllib.error.URLError, ValueError):
+                  sys.exit('::error::Package/repository preflight could not be verified; no publication.')
+
+          repo = read_api('repos/skyfore/nginx-proxy-manager')
+          package = read_api('users/skyfore/packages/container/nginx-proxy-manager')
+          expected_id = os.environ['EXPECTED_REPOSITORY_ID']
+          if not (str(repo.get('id')) == expected_id
+                  and repo.get('full_name') == 'skyfore/nginx-proxy-manager'
+                  and package.get('package_type') == 'container'
+                  and package.get('name') == 'nginx-proxy-manager'
+                  and package.get('owner', {}).get('login') == 'skyfore'
+                  and str((package.get('repository') or {}).get('id')) == expected_id):
+              sys.exit('::error::Existing package is not verified as linked to the exact source repository; no publication.')
+          visibility = package.get('visibility')
+          if visibility not in ('public', 'private'):
+              sys.exit('::error::Unexpected package visibility; no publication.')
+          print('Authenticated package ownership and repository link verified.')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'Existing GHCR package verified. Visibility: {visibility}.\n')
+              if visibility != 'public':
+                  summary.write('Publishing will not change visibility. Public access requires a separate authorized change and anonymous-pull verification.\n')
+          PY
+      - name: Publish unique trial tag with ephemeral job token
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$(mktemp -d)"
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          tag="pat-test-${SOURCE_COMMIT:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker tag npm-pat-local:test "$IMAGE:$tag"
+          docker push "$IMAGE:$tag"
+          # Ask the registry for its digest, rather than infer it from a local image ID.
+          docker buildx imagetools inspect "$IMAGE:$tag" --format '{{json .Manifest}}' > "$RUNNER_TEMP/pat-manifest.json"
+          digest="$(jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))' "$RUNNER_TEMP/pat-manifest.json")"
+          printf 'digest=%s\ntag=%s\n' "$digest" "$tag" >> "$GITHUB_OUTPUT"
+          printf 'Published trial tag: `%s:%s`\n\nImmutable image: `%s@%s`\n' "$IMAGE" "$tag" "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+  pull-and-smoke:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PUBLISHED_DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+          persist-credentials: false
+      - name: Pull exact registry digest on a fresh runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISHED_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          export DOCKER_CONFIG="$(mktemp -d)"
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          docker pull --platform linux/amd64 "$IMAGE@$PUBLISHED_DIGEST"
+          test "$(docker image inspect "$IMAGE@$PUBLISHED_DIGEST" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = https://github.com/skyfore/nginx-proxy-manager
+          test "$(docker image inspect "$IMAGE@$PUBLISHED_DIGEST" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_COMMIT"
+      - name: Test PAT policy in the downloaded production image
+        run: |
+          docker run --rm --network none --entrypoint sh "$IMAGE@$PUBLISHED_DIGEST" -c \
+            'node --test test/api-token-policy.test.js'
+      - name: Start disposable SQLite stack on loopback
+        run: |
+          docker network create npm-pat-test
+          docker volume create npm-pat-test-data
+          docker volume create npm-pat-test-certs
+          docker run -d --name upstream --network npm-pat-test nginx:alpine
+          docker exec upstream sh -c 'printf "pat-docker-smoke-upstream\n" > /usr/share/nginx/html/index.html'
+          docker run -d --name npm-pat-test --network npm-pat-test \
+            -p 127.0.0.1:18081:81 -p 127.0.0.1:18080:80 \
+            -e DB_SQLITE_FILE=/data/database.sqlite -e DISABLE_IPV6=true \
+            -e IP_RANGES_FETCH_ENABLED=false \
+            -v npm-pat-test-data:/data -v npm-pat-test-certs:/etc/letsencrypt \
+            "$IMAGE@$PUBLISHED_DIGEST"
+      - name: Test UI, real authentication, PAT lifecycle and Nginx forwarding
+        timeout-minutes: 5
+        run: python3 scripts/ci/pat-docker-smoke.py
+      - name: Verify live Nginx configuration
+        run: docker exec npm-pat-test nginx -t
+      - name: Record fresh-runner smoke success
+        run: |
+          printf 'PASS: pulled `%s@%s` on a fresh runner; PAT policy, real HTTP lifecycle and Nginx forwarding passed.\n' "$IMAGE" "$PUBLISHED_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Container status (no credentials or application logs)
+        if: always()
+        run: docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+      - name: Destroy disposable containers and data
+        if: always()
+        run: |
+          docker rm -fv npm-pat-test upstream 2>/dev/null || true
+          docker volume rm npm-pat-test-data npm-pat-test-certs 2>/dev/null || true
+          docker network rm npm-pat-test 2>/dev/null || true
+
+  anonymous-pull:
+    needs: [publish, pull-and-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      PUBLISHED_DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Verify public distribution without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISHED_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          export DOCKER_CONFIG="$(mktemp -d)"
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          if ! docker pull --platform linux/amd64 "$IMAGE@$PUBLISHED_DIGEST"; then
+            echo '::error::Anonymous pull failed. The image is not verified publicly downloadable. Do not claim public publication or change package visibility automatically.'
+            echo 'Authenticated pull/smoke passed, but anonymous distribution is unverified. Package visibility/access must be checked separately.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          printf 'PASS: anonymous pull of `%s@%s` on a fresh runner.\n' "$IMAGE" "$PUBLISHED_DIGEST" >> "$GITHUB_STEP_SUMMARY"
