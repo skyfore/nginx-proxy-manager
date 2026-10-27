@@ -179,18 +179,18 @@ export default function ApiTokens() {
 											</span>
 										</td>
 										<td className="text-end">
-											<Button
-												color="red"
-												variant="outline"
-												size="sm"
-												disabled={!!token.revokedOn}
-												onClick={() => {
-													setRevoking(token);
-													setRevokeError(null);
-												}}
-											>
-												<T id="api-tokens.revoke" />
-											</Button>
+											{!token.revokedOn && (
+												<Button
+													color="red"
+													size="sm"
+													onClick={() => {
+														setRevoking(token);
+														setRevokeError(null);
+													}}
+												>
+													<T id="api-tokens.revoke" />
+												</Button>
+											)}
 										</td>
 									</tr>
 								);
