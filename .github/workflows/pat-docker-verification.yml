@@ -28,9 +28,9 @@ jobs:
         timeout-minutes: 12
         run: |
           bash scripts/ci/frontend-build
-          ./frontend/node_modules/.bin/biome lint --config-path backend \
-            backend/internal/api-token.js backend/routes/api-tokens.js backend/lib/api-token-step-up.js \
-            backend/test/api-token-step-up-limit.test.js backend/test/api-token-integration.test.js
+          (cd backend && ../frontend/node_modules/.bin/biome lint \
+            internal/api-token.js routes/api-tokens.js lib/api-token-step-up.js \
+            test/api-token-step-up-limit.test.js test/api-token-integration.test.js)
       - name: Build native Docker image without publishing
         timeout-minutes: 15
         env:
