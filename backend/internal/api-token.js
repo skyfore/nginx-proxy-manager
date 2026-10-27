@@ -1,4 +1,5 @@
 import { generateToken, hashSecret, resources } from "../lib/api-token-policy.js";
+import { createStepUpLimiter } from "../lib/api-token-step-up.js";
 import errs from "../lib/error.js";
 import apiTokenModel from "../models/api_token.js";
 import auditLogModel from "../models/audit-log.js";
@@ -6,6 +7,7 @@ import authModel from "../models/auth.js";
 import userModel from "../models/user.js";
 import twoFactor from "./2fa.js";
 
+const verifyStepUp = createStepUpLimiter();
 const publicToken = (row) => ({
 	id: row.id,
 	name: row.name,
@@ -64,13 +66,18 @@ const internalApiToken = {
 			throw new errs.ValidationError("Invalid token scopes or expiry");
 		}
 		const user = await sessionUser(access);
-		const auth = await authenticationFor(user.id);
-		const denied = () =>
-			Object.assign(new Error("Password or verification code is incorrect"), { status: 403, public: true });
-		if (!auth || !(await auth.verifyPassword(data.password))) throw denied();
+		let auth;
+		const valid = await verifyStepUp(user.id, async () => {
+			auth = await authenticationFor(user.id);
+			if (!auth || !(await auth.verifyPassword(data.password))) return false;
+			return (
+				!optionsFor(user, auth).requires_2fa ||
+				!!(data.code && (await twoFactor.verifyForLogin(user.id, data.code)))
+			);
+		});
+		if (!valid)
+			throw Object.assign(new Error("Password or verification code is incorrect"), { status: 403, public: true });
 		const options = optionsFor(user, auth);
-		if (options.requires_2fa && (!data.code || !(await twoFactor.verifyForLogin(user.id, data.code))))
-			throw denied();
 		if (data.scopes.some((scope) => !options.scopes.includes(scope))) throw new errs.PermissionError();
 		const credential = generateToken();
 		const created = new Date();

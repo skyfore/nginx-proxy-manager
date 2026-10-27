@@ -123,7 +123,12 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 				...(body ? { body: JSON.stringify(body) } : {}),
 			});
 			const text = await response.text();
-			return { status: response.status, text, body: text ? JSON.parse(text) : null };
+			return {
+				status: response.status,
+				retryAfter: response.headers.get("retry-after"),
+				text,
+				body: text ? JSON.parse(text) : null,
+			};
 		};
 		const expectStatus = (result, status) => assert.equal(result.status, status, result.text);
 		const users = [];
@@ -594,6 +599,34 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 				const result = await call("GET", `${paths.proxy_hosts}?expand=owner`, other.jwt);
 				expectStatus(result, 200);
 				assert.ok(result.body.some((row) => row.owner));
+			});
+			await t.test("PAT creation step-up limits failed password attempts before checking valid credentials", async () => {
+				const user = await User.query().insertAndFetch({
+					email: "limited@example.test",
+					name: "limited",
+					nickname: "limited",
+					avatar: "",
+					roles: [],
+				});
+				user.password = randomBytes(20).toString("hex");
+				await Auth.query().insert({ user_id: user.id, type: "password", secret: user.password, meta: {} });
+				await Permission.query().insert({
+					user_id: user.id,
+					visibility: "user",
+					...Object.fromEntries(resources.map((resource) => [resource, "view"])),
+				});
+				const login = await call("POST", "/tokens", null, { identity: user.email, secret: user.password });
+				assert.equal(login.status, 200, "fixture login must succeed");
+				user.jwt = login.body.token;
+				const before = await ApiToken.query().where("owner_user_id", user.id).resultSize();
+				for (let attempt = 0; attempt < 5; attempt++) {
+					const failed = await create(user, ["proxy_hosts:read"], { password: "wrong" });
+					assert.equal(failed.status, 403, "failed step-up must be rejected");
+				}
+				const limited = await create(user, ["proxy_hosts:read"]);
+				assert.equal(limited.status, 429, "valid credentials must not bypass an active limit");
+				assert.ok(Number(limited.retryAfter) > 0 && Number(limited.retryAfter) <= 900);
+				assert.equal(await ApiToken.query().where("owner_user_id", user.id).resultSize(), before);
 			});
 			await t.test("SQLite PAT migration rolls down and recreates cleanly", async () => {
 				await new Promise((resolve) => setTimeout(resolve, 100));

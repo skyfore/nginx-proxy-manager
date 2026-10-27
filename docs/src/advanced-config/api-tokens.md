@@ -126,8 +126,14 @@ These endpoints require a normal user login JWT, never a PAT:
   returns `{ "revoked": true }`
 
 Scopes and expiry are checked on creation. A wrong step-up password/code returns
-403 so the UI can retry without losing the login session. The API schema documents
-request and response fields. Token operations and resource mutations are audited
+403 so the UI can retry without losing the login session. Each authenticated user
+may run one creation verification at a time. Five failed password/2FA checks within
+15 minutes block further checks until that window ends; successful verification
+resets the failure count. Limited requests return 429 with `Retry-After` seconds.
+This bounded, process-local protection stores no credentials. Restarting the process
+resets it, and separate instances do not share counters; use a shared gateway limiter
+when those deployment properties require stronger protection. It does not limit login
+or replace network access controls. The API schema documents request and response fields. Token operations and resource mutations are audited
 by user/token ID; token values and PAT-submitted configuration are not copied into
 audit metadata.
 
