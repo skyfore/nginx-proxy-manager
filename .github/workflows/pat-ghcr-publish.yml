@@ -14,7 +14,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/skyfore/nginx-proxy-manager
-  SOURCE_COMMIT: 144e502d7a67b4ba00d61cf7fde802c2735bcb3d
+  SOURCE_COMMIT: a01f29677c7a835f5f35ab572d70540f6153dab5
 
 jobs:
   publish:
