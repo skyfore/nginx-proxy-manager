@@ -56,14 +56,12 @@
 			"format": "date-time"
 		},
 		"revoked_on": {
-			"type": "string",
-			"format": "date-time",
-			"nullable": true
+			"type": ["string", "null"],
+			"format": "date-time"
 		},
 		"last_used_on": {
-			"type": "string",
-			"format": "date-time",
-			"nullable": true
+			"type": ["string", "null"],
+			"format": "date-time"
 		},
 		"token": {
 			"type": "string",
