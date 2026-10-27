@@ -14,7 +14,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/skyfore/nginx-proxy-manager
-  SOURCE_COMMIT: a01f29677c7a835f5f35ab572d70540f6153dab5
+  SOURCE_COMMIT: 9a62d8d5d26db75a10c50a6a3e4c4032b194df28
 
 jobs:
   publish:
@@ -36,7 +36,11 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
       - name: Build and test frontend using official project script
         timeout-minutes: 12
-        run: bash scripts/ci/frontend-build
+        run: |
+          bash scripts/ci/frontend-build
+          (cd backend && ../frontend/node_modules/.bin/biome lint \
+            internal/api-token.js routes/api-tokens.js lib/api-token-step-up.js \
+            test/api-token-step-up-limit.test.js test/api-token-integration.test.js)
       - name: Build and locally test production image before publication
         timeout-minutes: 15
         shell: bash
@@ -50,7 +54,7 @@ jobs:
             --build-arg "BUILD_COMMIT=$SOURCE_COMMIT" \
             --build-arg BUILD_DATE="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" .
           docker run --rm --network none --entrypoint sh npm-pat-local:test -c \
-            'node --test test/api-token-policy.test.js'
+            'node --test test/api-token-policy.test.js test/api-token-step-up-limit.test.js'
       - name: Authenticate and verify existing package belongs to this repository
         env:
           GH_TOKEN: ${{ github.token }}
@@ -132,7 +136,7 @@ jobs:
   pull-and-smoke:
     needs: publish
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read
@@ -160,7 +164,26 @@ jobs:
       - name: Test PAT policy in the downloaded production image
         run: |
           docker run --rm --network none --entrypoint sh "$IMAGE@$PUBLISHED_DIGEST" -c \
-            'node --test test/api-token-policy.test.js'
+            'node --test test/api-token-policy.test.js test/api-token-step-up-limit.test.js'
+      - name: Test isolated SQLite and Express integration (Nginx and ACME stubbed)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(mktemp)"
+          trap 'rm -f "$output"' EXIT
+          status=0
+          docker run --rm --network none --tmpfs /data \
+            -e NPM_API_TOKEN_TEST=1 -e NODE_CONFIG_DIR=/data/empty-config \
+            -e DB_SQLITE_FILE=/data/test.sqlite \
+            --entrypoint node "$IMAGE@$PUBLISHED_DIGEST" \
+            --test --test-reporter=tap test/api-token-integration.test.js >"$output" 2>&1 || status=$?
+          # Assertion diagnostics can contain fixture credentials. Print counts only.
+          grep -E '^# (tests|pass|fail|skipped|duration_ms) ' "$output" || true
+          test "$status" -eq 0
+          grep -Eq '^# tests [1-9][0-9]*$' "$output"
+          grep -Eq '^# fail 0$' "$output"
+          grep -Eq '^# skipped 0$' "$output"
       - name: Start disposable SQLite stack on loopback
         run: |
           docker network create npm-pat-test
@@ -175,7 +198,7 @@ jobs:
             -v npm-pat-test-data:/data -v npm-pat-test-certs:/etc/letsencrypt \
             "$IMAGE@$PUBLISHED_DIGEST"
       - name: Test UI, real authentication, PAT lifecycle and Nginx forwarding
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: python3 scripts/ci/pat-docker-smoke.py
       - name: Verify live Nginx configuration
         run: docker exec npm-pat-test nginx -t
