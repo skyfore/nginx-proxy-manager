@@ -1,4 +1,4 @@
-name: PAT Docker verification
+name: PAT pinned upstream candidate verification
 on:
   pull_request:
     branches: [develop]
@@ -14,16 +14,22 @@ permissions:
 concurrency:
   group: pat-docker-${{ github.event.pull_request.number }}
   cancel-in-progress: true
+env:
+  SOURCE_COMMIT: 7081390da64421ec88635a55bf28db046747317d
+
 jobs:
   docker-smoke:
+    name: Pinned upstream candidate 7081390da644
     if: github.repository == 'skyfore/nginx-proxy-manager' && github.event.pull_request.number == 1 && github.head_ref == 'feat/proxy-host-directory-api'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ env.SOURCE_COMMIT }}
           persist-credentials: false
+      - name: Verify exact upstream candidate source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
       - name: Build and test frontend using official project script
         timeout-minutes: 12
         run: |
@@ -34,7 +40,7 @@ jobs:
       - name: Build native Docker image without publishing
         timeout-minutes: 15
         env:
-          TEST_COMMIT: ${{ github.event.pull_request.head.sha }}
+          TEST_COMMIT: ${{ env.SOURCE_COMMIT }}
         run: |
           docker buildx build --platform linux/amd64 --load \
             -t npm-pat-local:test -f docker/Dockerfile \
