@@ -12,6 +12,12 @@ import mainRoutes from "./routes/main.js";
  * App
  */
 const app = express();
+// Set the redaction boundary before body/file parsers, whose errors can include
+// samples of credentials. This flag is not an authentication decision.
+app.use((req, res, next) => {
+	res.locals.apiTokenRequest = /^Bearer npm_pat_/.test(req.headers.authorization || "");
+	next();
+});
 app.use(fileUpload());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -71,7 +77,11 @@ app.use((err, req, res, _) => {
 		payload.error.message_i18n = err.message_i18n;
 	}
 
-	if (isDebugMode() || (req.baseUrl + req.path).includes("nginx/certificates")) {
+	if (
+		!res.locals.apiTokenRequest &&
+		!(req.baseUrl + req.path).includes("api-tokens") &&
+		(isDebugMode() || (req.baseUrl + req.path).includes("nginx/certificates"))
+	) {
 		payload.debug = {
 			stack: typeof err.stack !== "undefined" && err.stack ? err.stack.split("\n") : null,
 			previous: err.previous,
@@ -79,7 +89,12 @@ app.use((err, req, res, _) => {
 	}
 
 	// Not every error is worth logging - but this is good for now until it gets annoying.
-	if (typeof err.stack !== "undefined" && err.stack) {
+	if (
+		!res.locals.apiTokenRequest &&
+		!(req.baseUrl + req.path).includes("api-tokens") &&
+		typeof err.stack !== "undefined" &&
+		err.stack
+	) {
 		debug(logger, err.stack);
 		if (typeof err.public === "undefined" || !err.public) {
 			logger.warn(err.message);

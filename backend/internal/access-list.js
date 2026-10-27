@@ -514,13 +514,13 @@ const internalAccessList = {
 									next();
 								})
 								.catch((err) => {
-									logger.error(err);
+									logger.error(`Could not build Access file #${list.id}`);
 									next(err);
 								});
 						}
 					})
 					.error((err) => {
-						logger.error(err);
+						logger.error(`Could not build Access file #${list.id}`);
 						reject(err);
 					})
 					.end((results) => {
