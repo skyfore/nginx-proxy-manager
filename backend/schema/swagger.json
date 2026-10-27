@@ -67,6 +67,10 @@
 		{
 			"name": "users",
 			"description": "Endpoints for managing users"
+		},
+		{
+			"name": "api-tokens",
+			"description": "Endpoints for managing scoped personal API tokens using a login session"
 		}
 	],
 	"paths": {
@@ -383,7 +387,9 @@
 		"/api-tokens/options": {
 			"get": {
 				"$ref": "./paths/api-tokens/options/get.json"
-			}
+			},
+			"description": "Token creation options (allowed scopes and step-up requirements). Here options is a settings noun, not the HTTP OPTIONS method; retain this existing API path for compatibility.",
+			"x-lint-ignore": "no-http-verbs-in-path"
 		},
 		"/api-tokens/{tokenID}": {
 			"delete": {

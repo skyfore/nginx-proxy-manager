@@ -8,6 +8,11 @@ describe('Swagger Schema Linting', () => {
 		cy.task('backendApiGet', {
 			path: '/api/schema',
 		}).then((data) => {
+			// Keep the compatible noun-based path; exempt only its HTTP-verb style false positive.
+			const options = data.paths['/api-tokens/options'];
+			expect(options['x-lint-ignore']).to.equal('no-http-verbs-in-path');
+			expect(options.description).to.include('settings noun');
+			expect(options.get.operationId).to.equal('getApiTokenOptions');
 			const responses = data.paths['/api-tokens'];
 			const schemas = [
 				responses.get.responses['200'].content['application/json'].schema.items,

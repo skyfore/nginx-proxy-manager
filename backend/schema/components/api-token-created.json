@@ -15,10 +15,12 @@
 	"properties": {
 		"id": {
 			"type": "integer",
-			"minimum": 1
+			"minimum": 1,
+			"example": 1
 		},
 		"name": {
-			"type": "string"
+			"type": "string",
+			"example": "Home directory"
 		},
 		"scopes": {
 			"type": "array",
@@ -38,34 +40,43 @@
 					"certificates:read",
 					"certificates:write"
 				]
-			}
+			},
+			"example": [
+				"proxy_hosts:read"
+			]
 		},
 		"visibility": {
 			"type": "string",
 			"enum": [
 				"user",
 				"all"
-			]
+			],
+			"example": "user"
 		},
 		"created_on": {
 			"type": "string",
-			"format": "date-time"
+			"format": "date-time",
+			"example": "2026-01-01T00:00:00Z"
 		},
 		"expires_on": {
 			"type": "string",
-			"format": "date-time"
+			"format": "date-time",
+			"example": "2026-01-31T00:00:00Z"
 		},
 		"revoked_on": {
 			"type": ["string", "null"],
-			"format": "date-time"
+			"format": "date-time",
+			"example": null
 		},
 		"last_used_on": {
 			"type": ["string", "null"],
-			"format": "date-time"
+			"format": "date-time",
+			"example": null
 		},
 		"token": {
 			"type": "string",
-			"description": "Displayed once. Store securely; never embedded in browser code."
+			"description": "Displayed once. Store securely; never embedded in browser code.",
+			"example": "npm_example_not_a_real_token"
 		}
 	}
 }

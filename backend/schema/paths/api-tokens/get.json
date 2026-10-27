@@ -19,7 +19,21 @@
 						"items": {
 							"$ref": "../../components/api-token-object.json"
 						}
-					}
+					},
+					"example": [
+						{
+							"id": 1,
+							"name": "Home directory",
+							"scopes": [
+								"proxy_hosts:read"
+							],
+							"visibility": "user",
+							"created_on": "2026-01-01T00:00:00Z",
+							"expires_on": "2026-01-31T00:00:00Z",
+							"revoked_on": null,
+							"last_used_on": null
+						}
+					]
 				}
 			}
 		},

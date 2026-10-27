@@ -22,9 +22,13 @@
 						],
 						"properties": {
 							"revoked": {
-								"type": "boolean"
+								"type": "boolean",
+								"example": true
 							}
 						}
+					},
+					"example": {
+						"revoked": true
 					}
 				}
 			}
@@ -44,7 +48,9 @@
 			"schema": {
 				"type": "integer",
 				"minimum": 1
-			}
+			},
+			"description": "ID of a personal API token owned by the authenticated user",
+			"example": 1
 		}
 	]
 }

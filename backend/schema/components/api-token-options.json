@@ -27,23 +27,30 @@
 					"certificates:read",
 					"certificates:write"
 				]
-			}
+			},
+			"example": [
+				"proxy_hosts:read"
+			]
 		},
 		"visibility": {
 			"type": "string",
 			"enum": [
 				"user",
 				"all"
-			]
+			],
+			"example": "user"
 		},
 		"requires_2fa": {
-			"type": "boolean"
+			"type": "boolean",
+			"example": false
 		},
 		"max_expiry_days": {
-			"type": "integer"
+			"type": "integer",
+			"example": 365
 		},
 		"default_expiry_days": {
-			"type": "integer"
+			"type": "integer",
+			"example": 30
 		}
 	}
 }

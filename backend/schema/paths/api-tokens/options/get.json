@@ -16,6 +16,15 @@
 				"application/json": {
 					"schema": {
 						"$ref": "../../../components/api-token-options.json"
+					},
+					"example": {
+						"scopes": [
+							"proxy_hosts:read"
+						],
+						"visibility": "user",
+						"requires_2fa": false,
+						"max_expiry_days": 365,
+						"default_expiry_days": 30
 					}
 				}
 			}
