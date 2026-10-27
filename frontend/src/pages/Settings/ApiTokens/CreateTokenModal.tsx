@@ -9,6 +9,7 @@ import {
 } from "src/api/backend/apiTokens";
 import { Button } from "src/components";
 import { intl, T } from "src/locale";
+import styles from "./CreateTokenModal.module.css";
 
 interface Props {
 	options: ApiTokenOptions;
@@ -124,7 +125,7 @@ export default function CreateTokenModal({ options, onCreated, onClose, onRefres
 			onHide={close}
 			backdrop="static"
 			keyboard={!isSubmitting}
-			size="lg"
+			scrollable
 			aria-labelledby="api-token-create-title"
 		>
 			<Modal.Header closeButton={!isSubmitting} closeLabel={intl.formatMessage({ id: "api-tokens.close" })}>
@@ -173,7 +174,7 @@ export default function CreateTokenModal({ options, onCreated, onClose, onRefres
 					</Modal.Footer>
 				</>
 			) : (
-				<form onSubmit={submit}>
+				<form className={styles.form} onSubmit={submit}>
 					<Modal.Body>
 						{error && (
 							<Alert variant="danger">
@@ -184,41 +185,43 @@ export default function CreateTokenModal({ options, onCreated, onClose, onRefres
 							</Alert>
 						)}
 						<fieldset disabled={isSubmitting}>
-							<div className="mb-3">
-								<label className="form-label" htmlFor="api-token-name">
-									<T id="api-tokens.name" />
-								</label>
-								<input
-									id="api-token-name"
-									className="form-control"
-									value={name}
-									onChange={(event) => setName(event.target.value)}
-									maxLength={100}
-									required
-									autoComplete="off"
-								/>
-							</div>
-							<div className="mb-3">
-								<label className="form-label" htmlFor="api-token-expiry">
-									<T id="api-tokens.expiry-days" />
-								</label>
-								<input
-									id="api-token-expiry"
-									className="form-control"
-									type="number"
-									min={1}
-									max={options.maxExpiryDays}
-									step={1}
-									value={expiry}
-									onChange={(event) => setExpiry(event.target.value)}
-									required
-									aria-describedby="api-token-expiry-help"
-								/>
-								<div className="form-hint" id="api-token-expiry-help">
-									<T id="api-tokens.expiry-help" data={{ max: options.maxExpiryDays }} />
+							<div className="row">
+								<div className="col-sm-8 mb-3">
+									<label className="form-label" htmlFor="api-token-name">
+										<T id="api-tokens.name" />
+									</label>
+									<input
+										id="api-token-name"
+										className="form-control"
+										value={name}
+										onChange={(event) => setName(event.target.value)}
+										maxLength={100}
+										required
+										autoComplete="off"
+									/>
+								</div>
+								<div className="col-sm-4 mb-3">
+									<label className="form-label" htmlFor="api-token-expiry">
+										<T id="api-tokens.expiry-days" />
+									</label>
+									<input
+										id="api-token-expiry"
+										className="form-control"
+										type="number"
+										min={1}
+										max={options.maxExpiryDays}
+										step={1}
+										value={expiry}
+										onChange={(event) => setExpiry(event.target.value)}
+										required
+										aria-describedby="api-token-expiry-help"
+									/>
+									<div className="form-hint" id="api-token-expiry-help">
+										<T id="api-tokens.expiry-help" data={{ max: options.maxExpiryDays }} />
+									</div>
 								</div>
 							</div>
-							<h3>
+							<h3 className="form-label">
 								<T id="api-tokens.scopes" />
 							</h3>
 							<p className="text-muted">
@@ -230,8 +233,8 @@ export default function CreateTokenModal({ options, onCreated, onClose, onRefres
 									const write: ApiTokenScope = `${resource}:write`;
 									if (!options.scopes.includes(read) && !options.scopes.includes(write)) return null;
 									return (
-										<fieldset className="mb-3" key={resource}>
-											<legend className="form-label mb-2">
+										<fieldset className="mb-2" key={resource}>
+											<legend className="form-label mb-1">
 												<T id={resource.replace(/_/g, "-")} />
 											</legend>
 											{([undefined, read, write] as const).map((scope) => {
