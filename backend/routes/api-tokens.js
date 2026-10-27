@@ -27,6 +27,7 @@ router.post("/", async (req, res, next) => {
 		if (!data.name.trim()) throw new errs.ValidationError("Name must not be blank");
 		res.status(201).send(await internalApiToken.create(res.locals.access, data));
 	} catch (err) {
+		if (err.status === 429 && Number.isSafeInteger(err.retryAfter)) res.set("Retry-After", String(err.retryAfter));
 		// Validation exceptions may retain the request body. Never send or log it.
 		if (err.status === 400 || err.name === "ValidationError") {
 			next(Object.assign(new Error("Invalid API token request"), { status: 400, public: true }));

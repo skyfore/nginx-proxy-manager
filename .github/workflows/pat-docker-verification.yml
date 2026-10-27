@@ -26,7 +26,11 @@ jobs:
           persist-credentials: false
       - name: Build and test frontend using official project script
         timeout-minutes: 12
-        run: bash scripts/ci/frontend-build
+        run: |
+          bash scripts/ci/frontend-build
+          ./frontend/node_modules/.bin/biome lint --config-path backend \
+            backend/internal/api-token.js backend/routes/api-tokens.js backend/lib/api-token-step-up.js \
+            backend/test/api-token-step-up-limit.test.js backend/test/api-token-integration.test.js
       - name: Build native Docker image without publishing
         timeout-minutes: 15
         env:
@@ -40,7 +44,26 @@ jobs:
       - name: Test PAT policy inside production image
         run: |
           docker run --rm --network none --entrypoint sh npm-pat-local:test -c \
-            'node --test test/api-token-policy.test.js'
+            'node --test test/api-token-policy.test.js test/api-token-step-up-limit.test.js'
+      - name: Test isolated SQLite and Express integration (Nginx and ACME stubbed)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(mktemp)"
+          trap 'rm -f "$output"' EXIT
+          status=0
+          docker run --rm --network none --tmpfs /data \
+            -e NPM_API_TOKEN_TEST=1 -e NODE_CONFIG_DIR=/data/empty-config \
+            -e DB_SQLITE_FILE=/data/test.sqlite \
+            --entrypoint node npm-pat-local:test \
+            --test --test-reporter=tap test/api-token-integration.test.js >"$output" 2>&1 || status=$?
+          # Assertion diagnostics can contain fixture credentials. Print counts only.
+          grep -E '^# (tests|pass|fail|skipped|duration_ms) ' "$output" || true
+          test "$status" -eq 0
+          grep -Eq '^# tests [1-9][0-9]*$' "$output"
+          grep -Eq '^# fail 0$' "$output"
+          grep -Eq '^# skipped 0$' "$output"
       - name: Start disposable SQLite stack on loopback
         run: |
           docker network create npm-pat-test
@@ -55,7 +78,7 @@ jobs:
             -v npm-pat-test-data:/data -v npm-pat-test-certs:/etc/letsencrypt \
             npm-pat-local:test
       - name: Test UI, real authentication, PAT lifecycle and Nginx forwarding
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: python3 scripts/ci/pat-docker-smoke.py
       - name: Verify live Nginx configuration
         run: docker exec npm-pat-test nginx -t

@@ -13,6 +13,9 @@ import http.client
 import json
 import re
 import secrets
+import subprocess
+import tempfile
+from pathlib import Path
 import sys
 import time
 from html.parser import HTMLParser
@@ -52,7 +55,7 @@ def progress(message):
 
 
 def request(method, path, *, token=None, body=None, port=ADMIN_PORT, host=None,
-            timeout=REQUEST_SECONDS):
+            timeout=REQUEST_SECONDS, content_type="application/json"):
     # Use a fixed loopback connection: no environment proxy, DNS or redirects
     # can forward generated credentials outside this disposable Docker stack.
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
@@ -63,8 +66,8 @@ def request(method, path, *, token=None, body=None, port=ADMIN_PORT, host=None,
         headers["Host"] = host
     data = None
     if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = content_type
+        data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
     try:
         connection.request(method, path, body=data, headers=headers)
         response = connection.getresponse()
@@ -93,8 +96,8 @@ def no_secrets(value, label, *, allow_token=False):
                 f"{label}: response exposed credential material")
 
 
-def api(method, path, *, token=None, body=None, expected=200, allow_token=False):
-    status, content_type, raw = request(method, "/api" + path, token=token, body=body)
+def api(method, path, *, token=None, body=None, expected=200, allow_token=False, content_type="application/json"):
+    status, content_type, raw = request(method, "/api" + path, token=token, body=body, content_type=content_type)
     label = f"{method} /api{path}"
     require(status == expected, f"{label}: expected HTTP {expected}, got {status}")
     require("application/json" in content_type.lower(), f"{label}: expected JSON")
@@ -194,6 +197,273 @@ def token_metadata(jwt, token_id, *, revoked=False, used=False):
     if used:
         require(bool(row["last_used_on"]), "Token usage metadata was not recorded")
 
+
+
+RESOURCES = ("proxy_hosts", "redirection_hosts", "dead_hosts", "streams", "access_lists", "certificates")
+HOST_RESOURCES = RESOURCES[:4]
+
+
+def login_fixture(user):
+    result = api("POST", "/tokens", body={"identity": user["email"], "secret": user["password"]}, allow_token=True)
+    user["jwt"] = result["token"]
+    KNOWN_SECRETS.append(user["jwt"])
+
+
+def mint_fixture(user, scopes):
+    result = api("POST", "/api-tokens", token=user["jwt"], expected=201, allow_token=True,
+                 body={"name": "Disposable matrix", "scopes": scopes,
+                       "expires_in_days": 1, "password": user["password"]})
+    pat = result["token"]
+    secret = pat.split(".", 1)[1]
+    KNOWN_SECRETS.extend([pat, secret, hashlib.sha256(secret.encode()).hexdigest()])
+    return result
+
+
+def permissions_fixture(admin, user, *, visibility="user", level="manage"):
+    api("PUT", f"/users/{user['id']}/permissions", token=admin,
+        body={"visibility": visibility, **{resource: level for resource in RESOURCES}})
+
+
+def resource_payload(resource, label, index):
+    # Consume the repository's real API examples, not a parallel made-up schema.
+    schema = Path(__file__).resolve().parents[2] / "backend/schema/paths/nginx" / resource.replace("_", "-") / "post.json"
+    payload = json.loads(schema.read_text())["requestBody"]["content"]["application/json"].get("example", {})
+    if resource == "certificates":
+        # Local custom-certificate metadata only. Never ask an external ACME CA.
+        return {"provider": "other", "nice_name": f"matrix-{label}", "domain_names": [], "meta": {}}
+    if resource == "access_lists":
+        return {"name": f"matrix-{label}", "satisfy_any": False, "pass_auth": False, "items": [], "clients": []}
+    if resource == "streams":
+        return {**payload, "incoming_port": 19100 + index, "forwarding_host": "upstream", "forwarding_port": 80}
+    payload.update(domain_names=[f"matrix-{resource.replace('_', '-')}-{label}.test"], certificate_id=0,
+                   advanced_config="", meta={})
+    if resource == "proxy_hosts":
+        payload.update(forward_host="upstream", forward_port=80, access_list_id=0, locations=[])
+    return payload
+
+
+
+def custom_certificate_fixture():
+    # Self-signed throwaway fixture; no external issuer, DNS or ACME calls.
+    with tempfile.TemporaryDirectory(prefix="npm-pat-cert-") as folder:
+        key, cert = Path(folder) / "key.pem", Path(folder) / "cert.pem"
+        result = subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                                 "-days", "1", "-subj", "/CN=matrix-upload.test",
+                                 "-keyout", str(key), "-out", str(cert)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        require(result.returncode == 0, "Local certificate fixture generation failed")
+        private = key.read_bytes()
+        KNOWN_SECRETS.append(private.decode().strip())
+        boundary = "fixture-" + secrets.token_hex(16)
+        parts = []
+        for name, value in (("certificate", cert.read_bytes()), ("certificate_key", private)):
+            parts.append((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{name}.pem\"\r\n"
+                          "Content-Type: application/x-pem-file\r\n\r\n").encode() + value + b"\r\n")
+        return b"".join(parts) + f"--{boundary}--\r\n".encode(), "multipart/form-data; boundary=" + boundary
+
+def run_two_user_matrix(admin):
+    """Real HTTP, real DB, and real Nginx. No mocked authorization handlers.
+
+    Only expiry is changed through the disposable container DB to avoid a 1-day
+    wait; all user/permission/resource/token creation and lifecycle changes use API.
+    """
+    users = []
+    for label in ("a", "b"):
+        password = secrets.token_urlsafe(36)
+        KNOWN_SECRETS.append(password)
+        row = api("POST", "/users", token=admin, expected=201, body={
+            "name": f"Matrix {label}", "nickname": f"matrix-{label}",
+            "email": f"matrix-{label}@example.test", "roles": [],
+            "auth": {"type": "password", "secret": password},
+        })
+        require("admin" not in row.get("roles", []), "Matrix user must not be an administrator")
+        user = {"id": positive_id(row, "Matrix user"), "email": row["email"], "password": password}
+        permissions_fixture(admin, user)
+        login_fixture(user)
+        user["write"] = mint_fixture(user, [f"{resource}:write" for resource in RESOURCES])
+        user["read"] = mint_fixture(user, [f"{resource}:read" for resource in RESOURCES])
+        user["objects"] = {}
+        users.append(user)
+    a, b = users
+    certificate_body, certificate_type = custom_certificate_fixture()
+    for index, user in enumerate(users):
+        for resource in RESOURCES:
+            path = "/nginx/" + resource.replace("_", "-")
+            payload = resource_payload(resource, str(index), index)
+            created = api("POST", path, token=user["write"]["token"], body=payload, expected=201)
+            require(created.get("owner_user_id") == user["id"], "PAT create changed resource ownership")
+            user["objects"][resource] = positive_id(created, "Matrix resource")
+    progress("two ordinary own-visibility users created all six resource types using real PAT HTTP calls")
+
+    for actor, other in ((a, b), (b, a)):
+        for resource in RESOURCES:
+            path = "/nginx/" + resource.replace("_", "-")
+            own_path = f"{path}/{actor['objects'][resource]}"
+            foreign_path = f"{path}/{other['objects'][resource]}"
+            for token in (actor["read"]["token"], actor["write"]["token"]):
+                rows = api("GET", path, token=token)
+                require({row["id"] for row in rows} == {actor["objects"][resource]}, "List escaped own visibility")
+                api("GET", own_path, token=token)
+                api("GET", foreign_path, token=token, expected=403)
+            changes = ({"nice_name": "matrix-updated"} if resource == "certificates" else
+                       {"name": "matrix-updated"} if resource == "access_lists" else
+                       {"forwarding_port": 81} if resource == "streams" else
+                       {"http2_support": True} if resource == "dead_hosts" else {"block_exploits": True})
+            # The certificate API intentionally has no PUT route; do not invent one.
+            methods = [("DELETE", foreign_path, None)]
+            if resource != "certificates":
+                methods.append(("PUT", foreign_path, changes))
+                own_before = api("GET", own_path, token=actor["read"]["token"])
+                api("PUT", own_path, token=actor["read"]["token"], body=changes, expected=403)
+                require(api("GET", own_path, token=actor["read"]["token"]) == own_before,
+                        "Read-only rejected update changed the own object")
+                api("PUT", own_path, token=actor["write"]["token"], body=changes)
+                persisted = api("GET", own_path, token=actor["read"]["token"])
+                require(all(persisted.get(key) == value for key, value in changes.items()),
+                        "Allowed own update did not persist the requested fields")
+            if resource in HOST_RESOURCES:
+                for action in ("disable", "enable"):
+                    methods.append(("POST", foreign_path + "/" + action, {}))
+                    own_before = api("GET", own_path, token=actor["read"]["token"])
+                    api("POST", own_path + "/" + action, token=actor["read"]["token"], body={}, expected=403)
+                    require(api("GET", own_path, token=actor["read"]["token"]) == own_before,
+                            "Read-only rejected toggle changed the own object")
+                    api("POST", own_path + "/" + action, token=actor["write"]["token"], body={})
+                    persisted = api("GET", own_path, token=actor["read"]["token"])
+                    require(bool(persisted.get("enabled")) == (action == "enable"),
+                            "Allowed enable/disable did not persist the requested state")
+            if resource == "certificates":
+                # Renew denial must precede ACME; successful external renewal is
+                # intentionally outside this local self-signed certificate test.
+                api("POST", own_path + "/upload", token=actor["write"]["token"],
+                    body=certificate_body, content_type=certificate_type)
+                uploaded = api("GET", own_path, token=actor["read"]["token"])
+                require("matrix-upload.test" in uploaded.get("domain_names", []) and uploaded.get("expires_on"),
+                        "Allowed certificate upload did not persist certificate metadata")
+                before_upload = api("GET", foreign_path, token=other["read"]["token"])
+                api("POST", foreign_path + "/upload", token=actor["write"]["token"],
+                    body=certificate_body, content_type=certificate_type, expected=403)
+                require(api("GET", foreign_path, token=other["read"]["token"]) == before_upload,
+                        "Denied certificate upload modified foreign metadata")
+                for action in ("upload", "renew"):
+                    methods.append(("POST", foreign_path + "/" + action, {}))
+                    api("POST", own_path + "/" + action, token=actor["read"]["token"], body={}, expected=403)
+            before = api("GET", foreign_path, token=other["read"]["token"])
+            for method, target, body in methods:
+                api(method, target, token=actor["write"]["token"], body=body, expected=403)
+                after = api("GET", foreign_path, token=other["read"]["token"])
+                require(after == before, "Denied mutation changed a foreign object")
+            before_create = api("GET", path, token=actor["read"]["token"])
+            foreign_before_create = api("GET", path, token=other["read"]["token"])
+            api("POST", path, token=actor["write"]["token"], expected=403,
+                body={**resource_payload(resource, "forged", 8), "owner_user_id": other["id"]})
+            # No bulk route exists: this checks default-deny for unregistered paths,
+            # not successful or authorized bulk behavior.
+            api("POST", path + "/bulk", token=actor["write"]["token"], body={}, expected=403)
+            api("POST", path, token=actor["read"]["token"], body=resource_payload(resource, "denied", 9), expected=403)
+            require(api("GET", path, token=actor["read"]["token"]) == before_create,
+                    "Denied create changed the resource list")
+            require(api("GET", path, token=other["read"]["token"]) == foreign_before_create,
+                    "Denied forged-owner create changed the foreign resource list")
+            api("DELETE", own_path, token=actor["read"]["token"], expected=403)
+            still_there = api("GET", foreign_path, token=other["read"]["token"])
+            require(still_there.get("id") == other["objects"][resource], "Denied mutations removed foreign object")
+        metadata = api("GET", "/api-tokens", token=actor["jwt"])
+        require({row["id"] for row in metadata} == {actor["read"]["id"], actor["write"]["id"]},
+                "JWT token-management list exposed another user's tokens")
+        api("DELETE", f"/api-tokens/{other['write']['id']}", token=actor["jwt"], expected=404)
+        api("GET", "/nginx/proxy-hosts", token=other["write"]["token"])
+    progress("bidirectional six-resource ownership/read-write negative matrix, token-management isolation and allowed own mutations")
+
+    # Promotion must not widen an existing own-only PAT. A new all-visibility PAT
+    # may access shared objects, but subsequent demotion must restrict it again.
+    permissions_fixture(admin, a, visibility="all")
+    shared = mint_fixture(a, [f"{resource}:read" for resource in RESOURCES])
+    for resource in RESOURCES:
+        base = "/nginx/" + resource.replace("_", "-")
+        foreign = f"{base}/{b['objects'][resource]}"
+        api("GET", foreign, token=a["write"]["token"], expected=403)
+        api("GET", foreign, token=shared["token"])
+        rows = api("GET", base, token=shared["token"])
+        require({row["id"] for row in rows} == {a["objects"][resource], b["objects"][resource]},
+                "New all-visibility token did not honor shared visibility")
+    permissions_fixture(admin, a)
+    for resource in RESOURCES:
+        base = "/nginx/" + resource.replace("_", "-")
+        api("GET", f"{base}/{b['objects'][resource]}", token=shared["token"], expected=403)
+        rows = api("GET", base, token=shared["token"])
+        require({row["id"] for row in rows} == {a["objects"][resource]}, "Visibility demotion did not filter list")
+    for level in ("view", "hidden"):
+        permissions_fixture(admin, a, level=level)
+        for resource in RESOURCES:
+            path = f"/nginx/{resource.replace('_', '-')}/{a['objects'][resource]}"
+            api("GET", path, token=a["write"]["token"], expected=200 if level == "view" else 403)
+            api("DELETE", path, token=a["write"]["token"], expected=403)
+    permissions_fixture(admin, a)
+    progress("current permission intersection and both visibility promotion cap/demotion applied to existing PATs")
+
+    # Restricting scope must not be bypassed by object ownership or later permission changes.
+    narrow = mint_fixture(a, ["proxy_hosts:read"])
+    for resource in RESOURCES[1:]:
+        api("GET", "/nginx/" + resource.replace("_", "-"), token=narrow["token"], expected=403)
+    api("DELETE", f"/api-tokens/{narrow['id']}", token=a["jwt"])
+    api("GET", "/nginx/proxy-hosts", token=narrow["token"], expected=401)
+    expiring = mint_fixture(a, ["proxy_hosts:read"])
+    # Exact disposable test container and validated numeric ID, never production
+    # connection settings. Code/data go via stdin; no credential in args/output.
+    require(type(expiring["id"]) is int and expiring["id"] > 0, "Invalid expiry fixture ID")
+    source = ("import db from '/app/db.js'; const connection=db(); "
+              f"await connection('api_token').where({{id:{expiring['id']}}}).update({{expires_on:'2000-01-01T00:00:00.000Z'}}); "
+              "await connection.destroy();")
+    result = subprocess.run(["docker", "exec", "-i", "npm-pat-test", "node", "--input-type=module"],
+                            input=source, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    require(result.returncode == 0, "Disposable expiry fixture update failed (details suppressed)")
+    api("GET", "/nginx/proxy-hosts", token=expiring["token"], expected=401)
+
+    # Destructive own-resource operations happen after foreign mutation checks.
+    for user in users:
+        for resource in RESOURCES:
+            path = f"/nginx/{resource.replace('_', '-')}/{user['objects'][resource]}"
+            api("DELETE", path, token=user["write"]["token"])
+            api("GET", path, token=user["write"]["token"], expected=403)
+    old = a["write"]["token"]
+    api("PUT", f"/users/{a['id']}", token=admin, body={"is_disabled": True})
+    api("GET", "/nginx/proxy-hosts", token=old, expected=401)
+    api("PUT", f"/users/{a['id']}", token=admin, body={"is_disabled": False})
+    api("GET", "/nginx/proxy-hosts", token=old, expected=401)
+    login_fixture(a)
+    before_change = mint_fixture(a, ["proxy_hosts:read"])
+    changed_password = secrets.token_urlsafe(36)
+    KNOWN_SECRETS.append(changed_password)
+    api("PUT", f"/users/{a['id']}/auth", token=a["jwt"],
+        body={"type": "password", "current": a["password"], "secret": changed_password})
+    api("GET", "/nginx/proxy-hosts", token=before_change["token"], expected=401)
+    a["password"] = changed_password
+    login_fixture(a)
+    before_password = mint_fixture(a, ["proxy_hosts:read"])
+    new_password = secrets.token_urlsafe(36)
+    KNOWN_SECRETS.append(new_password)
+    api("PUT", f"/users/{a['id']}/auth", token=admin, body={"type": "password", "secret": new_password})
+    api("GET", "/nginx/proxy-hosts", token=before_password["token"], expected=401)
+    a["password"] = new_password
+    login_fixture(a)
+    before_delete = mint_fixture(a, ["proxy_hosts:read"])
+    api("DELETE", f"/users/{a['id']}", token=admin)
+    api("GET", "/nginx/proxy-hosts", token=before_delete["token"], expected=401)
+    # Real authenticated step-up limit: wrong credentials never create records,
+    # and after five failures even a correct password cannot skip the cooldown.
+    before_limit = api("GET", "/api-tokens", token=b["jwt"])
+    limit_payload = {"name": "Rejected limit fixture", "scopes": ["proxy_hosts:read"],
+                     "password": "deliberately-wrong-fixture-password", "expires_in_days": 1}
+    for _ in range(5):
+        api("POST", "/api-tokens", token=b["jwt"], body=limit_payload, expected=403)
+    api("POST", "/api-tokens", token=b["jwt"],
+        body={**limit_payload, "password": b["password"]}, expected=429)
+    require(api("GET", "/api-tokens", token=b["jwt"]) == before_limit,
+            "Rejected step-up attempts created or changed tokens")
+    progress("real API step-up failures return 403 then 429, without creating credentials")
+    api("DELETE", f"/users/{b['id']}", token=admin)
+    progress("real API own deletion, expiry DB fixture, revocation, disable/re-enable, password reset and user deletion invalidate PATs")
 
 def main():
     health = wait_for("admin API readiness", healthy, STARTUP_SECONDS)
@@ -310,6 +580,7 @@ def main():
     require(api("GET", "/users/me", token=jwt).get("id") == user_id,
             "JWT session stopped working after PAT revocation")
     progress("revocation is immediate, rejects credential reuse and preserves the JWT session")
+    run_two_user_matrix(jwt)
     print("PASS: Docker PAT smoke test completed", flush=True)
 
 

@@ -25,6 +25,9 @@
 		},
 		"403": {
 			"description": "Session, owner permissions or step-up verification required"
+		},
+		"429": {
+			"description": "Too many step-up failures or concurrent verification; retry after the Retry-After header duration"
 		}
 	},
 	"requestBody": {
