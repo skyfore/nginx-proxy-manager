@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import _ from "lodash";
 import errs from "../lib/error.js";
 import utils from "../lib/utils.js";
+import { errorDiagnostics } from "../lib/error-diagnostics.js";
 import { debug, nginx as logger } from "../logger.js";
 import accessListModel from "../models/access_list.js";
 import certificateModel from "../models/certificate.js";
@@ -279,28 +280,26 @@ const internalNginx = {
 			// Set the IPv6 setting for the host
 			host.ipv6 = internalNginx.ipv6Enabled();
 
-			locationsPromise
-				.then(() => {
-					renderEngine
-						.parseAndRender(template, host)
-						.then((config_text) => {
-							fs.writeFileSync(filename, config_text, { encoding: "utf8" });
-							debug(logger, "Wrote config:", filename);
+			locationsPromise.then(() => {
+				renderEngine
+					.parseAndRender(template, host)
+					.then((config_text) => {
+						fs.writeFileSync(filename, config_text, { encoding: "utf8" });
+						debug(logger, "Wrote config:", filename);
 
-							// Restore locations array
-							host.locations = origLocations;
+						// Restore locations array
+						host.locations = origLocations;
 
-							resolve(true);
-						})
-						.catch((err) => {
-							debug(logger, `Could not write ${filename}:`, err.message);
-							reject(new errs.ConfigurationError(err.message));
-						});
-				})
-				.catch((err) => {
-					debug(logger, `Could not render locations for ${filename}:`, err.message);
-					reject(new errs.ConfigurationError(err.message));
-				});
+						resolve(true);
+					})
+					.catch((err) => {
+						debug(logger, `Could not write ${filename}:`, errorDiagnostics(err));
+						reject(new errs.ConfigurationError(err.message));
+					});
+			}).catch((err) => {
+				debug(logger, `Could not render locations for ${filename}:`, errorDiagnostics(err));
+				reject(new errs.ConfigurationError(err.message));
+			});
 		});
 	},
 
@@ -384,7 +383,7 @@ const internalNginx = {
 					resolve(true);
 				})
 				.catch((err) => {
-					debug(logger, `Could not write ${filename}:`, err.message);
+					debug(logger, `Could not write ${filename}:`, errorDiagnostics(err));
 					reject(new errs.ConfigurationError(err.message));
 				});
 		});
