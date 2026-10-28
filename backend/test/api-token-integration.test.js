@@ -786,6 +786,26 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 				expectStatus(result, 200);
 				assert.ok(result.body.some((row) => row.owner));
 			});
+			await t.test(
+				"JWT expanded owners hide credential state and preserve the proxy-host response schema",
+				async () => {
+					const Ajv = (await import("ajv/dist/2020.js")).default;
+					const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
+					assert.ok(Number.isInteger((await User.query().findById(other.id)).api_token_version));
+					for (const resource of resources) {
+						const result = await call("GET", `${paths[resource]}?expand=owner`, other.jwt);
+						expectStatus(result, 200);
+						assert.ok(result.body.some((row) => row.owner));
+						assert.ok(!result.text.includes('"api_token_version"'));
+						if (resource === "proxy_hosts") {
+							const validate = ajv.compile(
+								schema.paths[paths[resource]].get.responses[200].content["application/json"].schema,
+							);
+							assert.ok(validate(result.body), JSON.stringify(validate.errors));
+						}
+					}
+				},
+			);
 			await t.test("PAT creation step-up limits failed password attempts before checking valid credentials", async () => {
 				const user = await User.query().insertAndFetch({
 					email: "limited@example.test",
