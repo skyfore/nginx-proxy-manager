@@ -686,6 +686,41 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 				expectStatus(await call("PUT", `/users/${viewer.id}`, admin.jwt, { is_disabled: false }), 200);
 				expectStatus(await call("GET", paths.proxy_hosts, token.token), 401);
 			});
+			await t.test("API password reset invalidates creation already verifying the old password", async () => {
+				const entered = Promise.withResolvers();
+				const release = Promise.withResolvers();
+				const verifyPassword = Auth.prototype.verifyPassword;
+				const verification = mock.method(Auth.prototype, "verifyPassword", async function (password) {
+					const valid = await verifyPassword.call(this, password);
+					if (this.user_id === viewer.id) {
+						entered.resolve();
+						await release.promise;
+					}
+					return valid;
+				});
+				const pending = create(viewer, ["proxy_hosts:read"]);
+				const password = randomBytes(20).toString("hex");
+				try {
+					await entered.promise;
+					expectStatus(
+						await call("PUT", `/users/${viewer.id}/auth`, admin.jwt, {
+							type: "password",
+							secret: password,
+						}),
+						200,
+					);
+				} finally {
+					release.resolve();
+				}
+				const created = await pending;
+				verification.mock.restore();
+				expectStatus(created, 201);
+				expectStatus(await call("GET", paths.proxy_hosts, created.body.token), 401);
+				const login = await call("POST", "/tokens", null, { identity: viewer.email, secret: password });
+				expectStatus(login, 200);
+				const fresh = await mint({ ...viewer, jwt: login.body.token, password }, ["proxy_hosts:read"]);
+				expectStatus(await call("GET", paths.proxy_hosts, fresh.token), 200);
+			});
 			await t.test(
 				"revocation, expiry, bad secrets, disable/delete and password change fail closed",
 				async () => {
@@ -716,11 +751,20 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 							.findById(owner.id)
 							.patch({ [field]: false });
 					}
-					const before = await Auth.query().findOne({ user_id: owner.id, type: "password" });
-					await Auth.query()
-						.findById(before.id)
-						.patch({ secret: randomBytes(20).toString("hex") });
+					const password = randomBytes(20).toString("hex");
+					expectStatus(
+						await call("PUT", `/users/${owner.id}/auth`, owner.jwt, {
+							type: "password",
+							current: owner.password,
+							secret: password,
+						}),
+						200,
+					);
 					expectStatus(await call("GET", paths.proxy_hosts, all.token), 401);
+					const login = await call("POST", "/tokens", null, { identity: owner.email, secret: password });
+					expectStatus(login, 200);
+					const fresh = await mint({ ...owner, jwt: login.body.token, password }, ["proxy_hosts:read"]);
+					expectStatus(await call("GET", paths.proxy_hosts, fresh.token), 200);
 				},
 			);
 			await t.test("real 2FA step-up cannot be skipped; valid TOTP permits creation", async () => {
