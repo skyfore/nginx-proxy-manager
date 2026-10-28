@@ -61,6 +61,7 @@ export const errorDiagnostics = (err) => {
 	if (codes.has(err?.code)) result.code = err.code;
 	if (codes.has(err?.type)) result.type = err.type;
 	if (Number.isInteger(err?.status) && err.status >= 400 && err.status <= 599) result.status = err.status;
-	if (Number.isInteger(err?.code) && err.code >= 0 && err.code <= 255) result.exit_code = err.code;
+	const exitCode = Number.isInteger(err?.code) ? err.code : err?.exit_code;
+	if (Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255) result.exit_code = exitCode;
 	return result;
 };

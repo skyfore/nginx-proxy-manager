@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { errorDiagnostics } from "../lib/error-diagnostics.js";
 import { requestLogArgs, resumeRequestContext, sensitiveRequestContext } from "../lib/request-context.js";
 
 const run = (path, authorization, next) => {
@@ -43,6 +44,17 @@ test("sensitive request logs isolate concurrent async work and leave JWT diagnos
 	resumeRequestContext({}, pat.res, () => {
 		assert.deepEqual(requestLogArgs(args), a);
 	});
+});
+
+test("request sink retains already-sanitized command failure diagnostics", async () => {
+	const safe = errorDiagnostics({ name: "CommandError", code: 17, message: "SECRET_COMMAND" });
+	const { promise } = run("/nginx/access-lists/1", "Bearer npm_pat_SECRET", () =>
+		requestLogArgs(["build failed", safe]),
+	);
+	const result = await promise;
+	assert.equal(result[1].error, "CommandError");
+	assert.equal(result[1].exit_code, 17);
+	assert.ok(!JSON.stringify(result).includes("SECRET"));
 });
 
 test("token management detection matches the mounted path, not arbitrary substrings", async () => {

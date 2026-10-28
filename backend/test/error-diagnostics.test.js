@@ -20,3 +20,17 @@ test("diagnostics retain actionable error labels without arbitrary error content
 	});
 	assert.deepEqual(errorDiagnostics({ code: 123456, status: 1000 }), { error: "Error" });
 });
+
+test("safe diagnostic mapping is idempotent, including bounded command exit codes", () => {
+	for (const error of [
+		{ name: "CommandError", code: 17, message: "SECRET" },
+		{ name: "TypeError", code: "EACCES", status: 500 },
+		{ name: "SyntaxError", type: "entity.parse.failed", status: 400 },
+	]) {
+		const safe = errorDiagnostics(error);
+		assert.deepEqual(errorDiagnostics(safe), safe);
+	}
+	for (const exit_code of [-1, 256, 1.5, "17", "SECRET", null, false, Number.POSITIVE_INFINITY, Number.NaN]) {
+		assert.deepEqual(errorDiagnostics({ exit_code }), { error: "Error" });
+	}
+});
