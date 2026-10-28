@@ -127,6 +127,7 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 			return {
 				status: response.status,
 				retryAfter: response.headers.get("retry-after"),
+				requestId: response.headers.get("x-request-id"),
 				text,
 				body: text ? JSON.parse(text) : null,
 			};
@@ -459,6 +460,96 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 					}
 				},
 			);
+			await t.test(
+				"sensitive failures remain observable without logging messages, stacks or bodies",
+				async () => {
+					const hosts = (await import("../internal/proxy-host.js")).default;
+					const tokens = (await import("../internal/api-token.js")).default;
+					const oldDebug = process.env.DEBUG;
+					process.env.DEBUG = "true";
+					const canary = "SENSITIVE_FAILURE_CANARY";
+					try {
+						for (const [operations, method, path, credential] of [
+							[hosts, "getAll", paths.proxy_hosts, all.token],
+							[tokens, "getAll", "/api-tokens", owner.jwt],
+						]) {
+							for (const failure of [
+								Object.assign(new TypeError(canary), { code: "EACCES" }),
+								{ name: "Error", code: "SQLITE_BUSY", message: canary, body: canary },
+							]) {
+								const stub = mock.method(operations, method, async () => {
+									throw failure;
+								});
+								let result;
+								try {
+									result = await call("GET", path, credential);
+								} finally {
+									stub.mock.restore();
+								}
+								expectStatus(result, 500);
+								assert.ok(result.requestId);
+								assert.ok(!result.text.includes(canary));
+								assert.ok(!result.body.debug);
+								await new Promise((resolve) => setTimeout(resolve, 30));
+								const log = await readFile("/data/logs/backend.log", "utf8");
+								assert.ok(!log.includes(canary));
+								assert.ok(
+									log
+										.split("\n")
+										.some(
+											(line) =>
+												line.includes("WARN") &&
+												line.includes(result.requestId) &&
+												line.includes(failure.code),
+										),
+								);
+							}
+						}
+						// The management boundary must also precede the JSON parser.
+						const raw = await fetch(`${base}/api-tokens`, {
+							method: "POST",
+							headers: { Authorization: `Bearer ${owner.jwt}`, "Content-Type": "application/json" },
+							body: `{"password":"${canary}",`,
+						});
+						assert.equal(raw.status, 400);
+						assert.ok(!(await raw.text()).includes(canary));
+						await new Promise((resolve) => setTimeout(resolve, 30));
+						const log = await readFile("/data/logs/backend.log", "utf8");
+						assert.ok(!log.includes(canary));
+						assert.ok(log.includes("entity.parse.failed"));
+					} finally {
+						if (oldDebug === undefined) delete process.env.DEBUG;
+						else process.env.DEBUG = oldDebug;
+					}
+				},
+			);
+			await t.test("PAT resource audit preserves actor, resource and typed changes", async () => {
+				const Access = (await import("../lib/access.js")).default;
+				const audit = (await import("../internal/audit-log.js")).default;
+				const access = new Access(all.token);
+				await access.load();
+				const row = await audit.add(access, {
+					action: "updated",
+					object_type: "proxy-host",
+					object_id: own.proxy_hosts.id,
+					meta: {
+						forward_port: 8081,
+						enabled: false,
+						advanced_config: "AUDIT_SECRET",
+						meta: { certificate_key: "AUDIT_SECRET" },
+					},
+				});
+				assert.equal(row.user_id, owner.id);
+				assert.equal(row.object_id, own.proxy_hosts.id);
+				assert.equal(row.object_type, "proxy-host");
+				assert.deepEqual(row.meta, {
+					api_token_id: all.id,
+					fields: ["advanced_config", "enabled", "forward_port", "meta"],
+					forward_port: 8081,
+					enabled: false,
+				});
+				assert.ok(!JSON.stringify(row).includes("AUDIT_SECRET"));
+			});
 			for (const resource of resources) {
 				await t.test(
 					`${resource} scope: real create/read/${resource === "certificates" ? "delete (PUT forbidden)" : "update/delete"}`,
@@ -535,7 +626,13 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 				assert.ok(!text.includes("certificate_key"));
 				assert.ok(!text.includes(key));
 				await new Promise((resolve) => setTimeout(resolve, 50));
-				assert.ok(!(await readFile("/data/logs/backend.log", "utf8")).includes(key));
+				const log = await readFile("/data/logs/backend.log", "utf8");
+				assert.ok(!log.includes(key));
+				assert.ok(
+					log
+						.split("\n")
+						.some((line) => line.includes("[SSL") && line.includes(response.headers.get("x-request-id"))),
+				);
 				assert.equal(await readFile(`/data/custom_ssl/npm-${own.certificates.id}/privkey.pem`, "utf8"), key);
 			});
 			for (const enableDuringVerification of [false, true]) {

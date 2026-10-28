@@ -26,6 +26,7 @@ import roleSchema from "./access/roles.json" with { type: "json" };
 import { loadApiToken } from "./api-token-auth.js";
 import { permits, tokenPrefix } from "./api-token-policy.js";
 import errs from "./error.js";
+import { errorDiagnostics } from "./error-diagnostics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -350,7 +351,8 @@ export default function (tokenString) {
 			} catch (err) {
 				err.permission = permission;
 				err.permission_data = data;
-				logger.error(permission, isApiToken ? "[API token request]" : data, err.message);
+				if (isApiToken) logger.error(permission, errorDiagnostics(err));
+				else logger.error(permission, data, err.message);
 				// A revoked token is not a permission problem, and the client can tell: the frontend
 				// clears the session on a 401 and on nothing else.
 				if (err instanceof errs.TokenRevokedError) {

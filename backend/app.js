@@ -5,6 +5,7 @@ import fileUpload from "express-fileupload";
 import { isDebugMode } from "./lib/config.js";
 import cors from "./lib/express/cors.js";
 import jwt from "./lib/express/jwt.js";
+import { resumeRequestContext, sensitiveRequestContext } from "./lib/request-context.js";
 import { debug, express as logger } from "./logger.js";
 import mainRoutes from "./routes/main.js";
 
@@ -12,15 +13,11 @@ import mainRoutes from "./routes/main.js";
  * App
  */
 const app = express();
-// Set the redaction boundary before body/file parsers, whose errors can include
-// samples of credentials. This flag is not an authentication decision.
-app.use((req, res, next) => {
-	res.locals.apiTokenRequest = /^Bearer npm_pat_/.test(req.headers.authorization || "");
-	next();
-});
+app.use(sensitiveRequestContext);
 app.use(fileUpload());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(resumeRequestContext);
 
 // Gzip
 app.use(compression());
@@ -65,6 +62,7 @@ app.use("/", mainRoutes);
 
 // production error handler
 // no stacktraces leaked to user
+app.use((err, req, res, next) => resumeRequestContext(req, res, () => next(err)));
 app.use((err, req, res, _) => {
 	const payload = {
 		error: {
@@ -78,8 +76,7 @@ app.use((err, req, res, _) => {
 	}
 
 	if (
-		!res.locals.apiTokenRequest &&
-		!(req.baseUrl + req.path).includes("api-tokens") &&
+		!res.locals.sensitiveRequest &&
 		(isDebugMode() || (req.baseUrl + req.path).includes("nginx/certificates"))
 	) {
 		payload.debug = {
@@ -89,12 +86,12 @@ app.use((err, req, res, _) => {
 	}
 
 	// Not every error is worth logging - but this is good for now until it gets annoying.
-	if (
-		!res.locals.apiTokenRequest &&
-		!(req.baseUrl + req.path).includes("api-tokens") &&
-		typeof err.stack !== "undefined" &&
-		err.stack
-	) {
+	if (res.locals.sensitiveRequest) {
+		// The logger retains only safe diagnostic labels and a request ID. Do not
+		// require a stack: database/driver failures can also be plain objects.
+		if (!err.public) logger.warn(err);
+		else debug(logger, err);
+	} else if (typeof err.stack !== "undefined" && err.stack) {
 		debug(logger, err.stack);
 		if (typeof err.public === "undefined" || !err.public) {
 			logger.warn(err.message);

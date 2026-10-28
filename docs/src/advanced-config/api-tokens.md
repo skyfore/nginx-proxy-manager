@@ -136,8 +136,15 @@ This bounded, process-local protection stores no credentials. Restarting the pro
 resets it, and separate instances do not share counters; use a shared gateway limiter
 when those deployment properties require stronger protection. It does not limit login
 or replace network access controls. The API schema documents request and response fields. Token operations and resource mutations are audited
-by user/token ID; token values and PAT-submitted configuration are not copied into
-audit metadata.
+by user/token and resource ID. Resource audit metadata records the recognized
+fields involved, safe boolean/numeric settings and collection counts. Free text,
+raw configuration, credentials and nested payloads are not copied into PAT audit
+metadata.
+
+PAT and token-management errors omit client debug objects. Server diagnostics use
+an `X-Request-ID` correlation ID, method, resource family and known error
+categories/codes; raw messages, stacks, request bodies and credentials are omitted.
+Ordinary JWT resource requests retain their existing diagnostic behavior.
 
 ## Development and compatibility
 

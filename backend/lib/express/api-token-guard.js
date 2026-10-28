@@ -8,6 +8,8 @@ import streamModel from "../../models/stream.js";
 import Access from "../access.js";
 import { hasUnsafeConfiguration, operationFor, redactResponse, tokenPrefix } from "../api-token-policy.js";
 import errs from "../error.js";
+import { errorDiagnostics } from "../error-diagnostics.js";
+import { express as logger } from "../../logger.js";
 
 const hostModels = {
 	proxy_hosts: proxyHostModel,
@@ -94,7 +96,6 @@ export default async (req, res, next) => {
 	// Install before authentication, so failures never expose diagnostic objects.
 	const json = res.json.bind(res);
 	res.json = (body) => json(redactResponse(body));
-	res.locals.apiTokenRequest = true;
 	try {
 		const access = new Access(res.locals.token);
 		await access.load();
@@ -129,8 +130,10 @@ export default async (req, res, next) => {
 					object_id: responseId || 0,
 					meta: { api_token_id: access.getApiTokenId(), method: req.method },
 				})
-				.catch(() => {
-					/* The existing resource audit remains authoritative. Never log credentials. */
+				.catch((err) => {
+					// Resource audit remains authoritative, but secondary audit failures
+					// should still be diagnosable without leaking database parameters.
+					logger.warn("API token usage audit failed", errorDiagnostics(err));
 				});
 		});
 		next();
