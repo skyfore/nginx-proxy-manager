@@ -10,7 +10,14 @@ import internalAuditLog from "./audit-log.js";
 import internalToken from "./token.js";
 
 const omissions = () => {
-	return ["is_deleted", "permissions.id", "permissions.user_id", "permissions.created_on", "permissions.modified_on"];
+	return [
+		"is_deleted",
+		"api_token_version",
+		"permissions.id",
+		"permissions.user_id",
+		"permissions.created_on",
+		"permissions.modified_on",
+	];
 };
 
 const DEFAULT_AVATAR = gravatar.url("admin@example.com", { default: "mm" });
@@ -127,8 +134,12 @@ const internalUser = {
 
 				data.avatar = gravatar.url(data.email || user.email, { default: "mm" });
 				return userModel.transaction(async (trx) => {
-					const row = await userModel.query(trx).patchAndFetchById(user.id, data);
-					if (data.is_disabled === true || data.is_disabled === 1) {
+					const disabling = data.is_disabled === true || data.is_disabled === 1;
+					const row = await userModel.query(trx).patchAndFetchById(user.id, {
+						...data,
+						...(disabling ? { api_token_version: trx.raw("?? + 1", ["api_token_version"]) } : {}),
+					});
+					if (disabling) {
 						await apiTokenModel
 							.query(trx)
 							.where("owner_user_id", user.id)

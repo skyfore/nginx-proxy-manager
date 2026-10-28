@@ -5,6 +5,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { mock, test } from "node:test";
 
 // Runs with a disposable /data filesystem. Never points at an existing NPM DB.
@@ -510,9 +511,9 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 						"-subj",
 						"/CN=upload.example.test",
 						"-keyout",
-						"/data/key.pem",
+						resolve("/data/key.pem"),
 						"-out",
-						"/data/cert.pem",
+						resolve("/data/cert.pem"),
 						"-days",
 						"1",
 					],
@@ -537,6 +538,50 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 				assert.ok(!(await readFile("/data/logs/backend.log", "utf8")).includes(key));
 				assert.equal(await readFile(`/data/custom_ssl/npm-${own.certificates.id}/privkey.pem`, "utf8"), key);
 			});
+			for (const enableDuringVerification of [false, true]) {
+				await t.test(
+					`in-flight creation cannot escape disable (early re-enable: ${enableDuringVerification})`,
+					async () => {
+						const entered = Promise.withResolvers();
+						const release = Promise.withResolvers();
+						const verifyPassword = Auth.prototype.verifyPassword;
+						const verification = mock.method(Auth.prototype, "verifyPassword", async function (password) {
+							const valid = await verifyPassword.call(this, password);
+							if (this.user_id === viewer.id) {
+								entered.resolve();
+								await release.promise;
+							}
+							return valid;
+						});
+						const pending = create(viewer, ["proxy_hosts:read"]);
+						try {
+							await entered.promise;
+							expectStatus(
+								await call("PUT", `/users/${viewer.id}`, admin.jwt, { is_disabled: true }),
+								200,
+							);
+							if (enableDuringVerification)
+								expectStatus(
+									await call("PUT", `/users/${viewer.id}`, admin.jwt, { is_disabled: false }),
+									200,
+								);
+						} finally {
+							release.resolve();
+						}
+						const created = await pending;
+						verification.mock.restore();
+						if (!enableDuringVerification)
+							expectStatus(
+								await call("PUT", `/users/${viewer.id}`, admin.jwt, { is_disabled: false }),
+								200,
+							);
+						expectStatus(created, 201);
+						expectStatus(await call("GET", paths.proxy_hosts, created.body.token), 401);
+						const fresh = await mint(viewer, ["proxy_hosts:read"]);
+						expectStatus(await call("GET", paths.proxy_hosts, fresh.token), 200);
+					},
+				);
+			}
 			await t.test("user disable via JWT permanently revokes PATs across re-enable", async () => {
 				const token = await mint(viewer, ["proxy_hosts:read"]);
 				expectStatus(await call("PUT", `/users/${viewer.id}`, admin.jwt, { is_disabled: true }), 200);
@@ -631,10 +676,16 @@ if (process.env.NPM_API_TOKEN_TEST !== "1") {
 			await t.test("SQLite PAT migration rolls down and recreates cleanly", async () => {
 				await new Promise((resolve) => setTimeout(resolve, 100));
 				const migration = await import("../migrations/20261014171500_api_tokens.js");
+				const versionMigration = await import("../migrations/20261028180000_api_token_version.js");
 				assert.equal(await db().schema.hasTable("api_token"), true);
+				await versionMigration.down(db());
+				assert.equal(await db().schema.hasColumn("user", "api_token_version"), false);
 				await migration.down(db());
 				assert.equal(await db().schema.hasTable("api_token"), false);
 				await migration.up(db());
+				await versionMigration.up(db());
+				assert.equal(await db().schema.hasColumn("api_token", "owner_version"), true);
+				assert.equal((await User.query().findById(owner.id)).api_token_version, 0);
 				assert.equal(await db().schema.hasTable("api_token"), true);
 				assert.equal(await ApiToken.query().resultSize(), 0);
 			});

@@ -22,7 +22,9 @@ secret or its digest. You can only manage your own tokens. Revocation is permane
 and is checked on each new request; a request already executing can finish.
 Changing/resetting the account password invalidates existing PATs. Disabling an
 account through NPM permanently revokes its PATs, so re-enabling it does not restore
-them. Deleted or disabled accounts cannot authenticate.
+them. A durable account version also invalidates tokens whose creation overlaps
+the disable, including a disable/re-enable during password verification. Deleted
+or disabled accounts cannot authenticate.
 
 ## Call existing APIs
 

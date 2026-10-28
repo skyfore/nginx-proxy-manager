@@ -85,6 +85,9 @@ const internalApiToken = {
 			const inserted = await apiTokenModel.query(trx).insertAndFetch({
 				public_id: credential.publicId,
 				owner_user_id: user.id,
+				// Capture the version read BEFORE password/2FA verification. A disable
+				// committed during verification invalidates even a later insertion.
+				owner_version: user.api_token_version,
 				name: data.name.trim(),
 				secret_hash: credential.hash,
 				scopes: data.scopes,

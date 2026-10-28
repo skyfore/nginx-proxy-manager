@@ -20,7 +20,8 @@ export const loadApiToken = async (value) => {
 	}
 	const user = await userModel.query().findById(row.owner_user_id).where("is_deleted", 0).where("is_disabled", 0);
 	const auth = await authModel.query().findOne({ user_id: row.owner_user_id, type: "password" });
-	if (!user || !auth || hashSecret(auth.secret) !== row.password_version) throw invalidToken();
+	if (!user || user.api_token_version !== row.owner_version || !auth || hashSecret(auth.secret) !== row.password_version)
+		throw invalidToken();
 	// Usage metadata is throttled, never an authorization cache.
 	if (!row.last_used_on || Date.now() - new Date(row.last_used_on).getTime() > 60000) {
 		await apiTokenModel.query().findById(row.id).patch({ last_used_on: new Date().toISOString() });
