@@ -96,6 +96,11 @@ jobs:
         working-directory: candidate
         timeout-minutes: 10
         run: python3 scripts/ci/pat-docker-smoke.py
+      - name: Select supported Node runtime for browser dependencies
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.22.1'
       - name: Install existing locked Cypress dependencies
         id: browser_dependencies
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
