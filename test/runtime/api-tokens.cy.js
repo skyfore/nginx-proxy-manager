@@ -21,7 +21,7 @@ describe('Personal API tokens in the production browser application', () => {
     cy.get('input[name="api-token-proxy_hosts"]').eq(1).check();
     cy.get('#api-token-password').type(password, { log: false });
   };
-  const submit = () => cy.get('[role="dialog"] form').trigger('submit');
+  const submit = () => cy.get('[role="dialog"] button[type="submit"]').should('be.enabled').click();
   const list = () => request('GET', '/api-tokens').then(({ status, body }) => {
     expect(status, 'authenticated metadata list status').to.equal(200);
     expect(body.every(row => !('token' in row)), 'list contains metadata only').to.equal(true);
@@ -62,14 +62,19 @@ describe('Personal API tokens in the production browser application', () => {
     cy.get('input[name="api-token-proxy_hosts"]').eq(0).should('be.checked');
     list().then(rows => expect(rows.length, 'cancel creates no token').to.equal(0));
 
+    let releaseResponse;
+    const responseGate = new Promise(resolve => { releaseResponse = resolve; });
     cy.intercept('POST', '/api/api-tokens', req => {
       creates += 1;
-      req.continue(res => res.setDelay(800));
+      req.continue(() => responseGate);
     }).as('create');
     fill('browser-created');
-    submit();
-    submit();
-    cy.get('[role="dialog"] fieldset').first().should('be.disabled');
+    cy.get('[role="dialog"] button[type="submit"]').should('be.enabled').then($button => {
+      $button[0].click();
+      $button[0].click();
+    });
+    cy.get('[role="dialog"] fieldset').first().should('have.prop', 'disabled', true);
+    cy.then(() => releaseResponse());
     cy.wait('@create', { log: false }).then(({ response }) => {
       expect(response.statusCode).to.equal(201);
       token = response.body.token;
