@@ -13,8 +13,8 @@ concurrency:
   group: pat-candidate-verification
   cancel-in-progress: true
 env:
-  SOURCE_COMMIT: 744335cfdea323b4ff419e038bdd5a2ec2ebfaca
-  SOURCE_TREE: 2d31546300415bb582f0d7b15ea7ab36d0d8d35c
+  SOURCE_COMMIT: e51bd83db8dc85678ea868163051d0dd932e95a7
+  SOURCE_TREE: 4e2ed2ce1d3891d9618848f4148234f039077287
 
 jobs:
   production-runtime:
@@ -78,6 +78,7 @@ jobs:
           grep -Eq '^# fail 0$' "$output"
           grep -Eq '^# skipped 0$' "$output"
       - name: Start disposable production stacks
+        id: runtime
         run: |
           docker network create npm-pat-test
           docker run -d --name upstream --network npm-pat-test nginx:alpine
@@ -96,9 +97,12 @@ jobs:
         timeout-minutes: 10
         run: python3 scripts/ci/pat-docker-smoke.py
       - name: Install existing locked Cypress dependencies
+        id: browser_dependencies
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         timeout-minutes: 8
         run: npm exec --yes --package=yarn@1.22.22 -- yarn --cwd candidate/test install --frozen-lockfile
       - name: Real Chrome login, token creation, clipboard, cancellation and revocation
+        if: ${{ !cancelled() && steps.browser_dependencies.outcome == 'success' }}
         working-directory: candidate/test
         timeout-minutes: 5
         run: |
