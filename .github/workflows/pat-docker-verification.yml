@@ -13,8 +13,8 @@ concurrency:
   group: pat-candidate-verification
   cancel-in-progress: true
 env:
-  SOURCE_COMMIT: e51bd83db8dc85678ea868163051d0dd932e95a7
-  SOURCE_TREE: 4e2ed2ce1d3891d9618848f4148234f039077287
+  SOURCE_COMMIT: 0fa10fc80cd6a836824d85f8b243a5c1bc311195
+  SOURCE_TREE: dbabeb154f3c189fe77d6d210ae22b433729937a
 
 jobs:
   production-runtime:
