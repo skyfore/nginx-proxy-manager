@@ -1,0 +1,129 @@
+name: PAT pinned upstream candidate verification
+
+# Fork-only test harness. The publication workflow is intentionally untouched.
+on:
+  push:
+    branches: [feat/proxy-host-directory-api]
+    paths:
+      - '.github/workflows/pat-docker-verification.yml'
+      - 'test/runtime/**'
+permissions:
+  contents: read
+concurrency:
+  group: pat-candidate-verification
+  cancel-in-progress: true
+env:
+  SOURCE_COMMIT: 113240a7977be0c9c07d6c0322e39c3100d2a30b
+  SOURCE_TREE: 2fcc75982236a228f45f815e06cf96363dcf14d2
+
+jobs:
+  production-runtime:
+    if: github.repository == 'skyfore/nginx-proxy-manager'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout immutable verification harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+          path: candidate
+          persist-credentials: false
+      - name: Verify source identity
+        run: |
+          test "$(git -C candidate rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git -C candidate rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git -C harness rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'Candidate: `%s`\nHarness: `%s`\nTree: `%s`\n' "$SOURCE_COMMIT" "$GITHUB_SHA" "$(git -C candidate rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build and test frontend using official project script
+        working-directory: candidate
+        timeout-minutes: 12
+        run: |
+          bash scripts/ci/frontend-build
+          (cd backend && ../frontend/node_modules/.bin/biome lint .)
+      - name: Build production image without publishing
+        working-directory: candidate
+        timeout-minutes: 15
+        run: |
+          docker buildx build --platform linux/amd64 --load --iidfile "$RUNNER_TEMP/candidate-image-id" \
+            -t npm-pat-local:test -f docker/Dockerfile \
+            --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+            --build-arg BUILD_VERSION=pat-verification \
+            --build-arg BUILD_COMMIT="$SOURCE_COMMIT" \
+            --build-arg BUILD_DATE="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" .
+          image_id="$(cat "$RUNNER_TEMP/candidate-image-id")"
+          test "$(docker image inspect npm-pat-local:test --format '{{.Id}}')" = "$image_id"
+          test "$(docker image inspect "$image_id" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_COMMIT"
+          printf 'IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
+          printf 'Locally built immutable image ID (not a published registry digest): `%s`\n' "$image_id" >> "$GITHUB_STEP_SUMMARY"
+      - name: Policy and isolated integration tests inside production image
+        timeout-minutes: 5
+        run: |
+          docker run --rm --network none --entrypoint sh "$IMAGE_ID" -c \
+            'node --test test/nginx-values.test.js test/api-token-policy.test.js test/api-token-step-up-limit.test.js test/api-token-audit.test.js test/error-diagnostics.test.js test/request-context.test.js'
+          output="$(mktemp)"
+          trap 'rm -f "$output"' EXIT
+          status=0
+          docker run --rm --network none --tmpfs /data \
+            -e NPM_API_TOKEN_TEST=1 -e NODE_CONFIG_DIR=/data/empty-config -e DB_SQLITE_FILE=/data/test.sqlite \
+            --entrypoint node "$IMAGE_ID" --test --test-reporter=tap test/api-token-integration.test.js >"$output" 2>&1 || status=$?
+          grep -E '^# (tests|pass|fail|skipped|duration_ms) ' "$output" || true
+          test "$status" -eq 0
+          grep -Eq '^# tests [1-9][0-9]*$' "$output"
+          grep -Eq '^# fail 0$' "$output"
+          grep -Eq '^# skipped 0$' "$output"
+      - name: Start disposable production stacks
+        id: runtime
+        run: |
+          docker network create npm-pat-test
+          docker run -d --name upstream --network npm-pat-test nginx:alpine
+          docker exec upstream sh -c 'printf "pat-docker-smoke-upstream\n" > /usr/share/nginx/html/index.html'
+          for name in npm-pat-test npm-pat-browser; do
+            docker volume create "$name-data"
+            docker volume create "$name-certs"
+            if [ "$name" = npm-pat-test ]; then ports='-p 127.0.0.1:18081:81 -p 127.0.0.1:18080:80'; else ports='-p 127.0.0.1:18082:81'; fi
+            docker run -d --name "$name" --network npm-pat-test $ports \
+              -e DB_SQLITE_FILE=/data/database.sqlite -e DISABLE_IPV6=true -e IP_RANGES_FETCH_ENABLED=false \
+              -v "$name-data:/data" -v "$name-certs:/etc/letsencrypt" "$IMAGE_ID"
+            test "$(docker inspect "$name" --format '{{.Image}}')" = "$IMAGE_ID"
+          done
+      - name: Real HTTP authorization, token lifecycle, certificate upload and Nginx forwarding
+        working-directory: candidate
+        timeout-minutes: 10
+        run: python3 scripts/ci/pat-docker-smoke.py
+      - name: Select supported Node runtime for browser dependencies
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.22.1'
+      - name: Install existing locked Cypress dependencies
+        id: browser_dependencies
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        timeout-minutes: 8
+        run: npm exec --yes --package=yarn@1.22.22 -- yarn --cwd candidate/test install --frozen-lockfile
+      - name: Real Chrome login, token creation, clipboard, cancellation and revocation
+        if: ${{ !cancelled() && steps.browser_dependencies.outcome == 'success' }}
+        working-directory: candidate/test
+        timeout-minutes: 5
+        run: |
+          ./node_modules/.bin/cypress run --browser chrome --config-file ../../harness/test/runtime/cypress.config.cjs
+      - name: Verify live Nginx and record success
+        run: |
+          docker exec npm-pat-test nginx -t
+          docker exec npm-pat-browser nginx -t
+          printf 'PASS: production image, real API/Nginx smoke and real Chrome flows for `%s`.\n' "$SOURCE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+      - name: Container status only (never credential-bearing application logs)
+        if: always()
+        run: docker ps -a --format 'table {{.Names}}\t{{.Status}}'
+      - name: Destroy disposable runtime and browser artifacts
+        if: always()
+        run: |
+          docker rm -fv npm-pat-test npm-pat-browser upstream 2>/dev/null || true
+          docker volume rm npm-pat-test-data npm-pat-test-certs npm-pat-browser-data npm-pat-browser-certs 2>/dev/null || true
+          docker network rm npm-pat-test 2>/dev/null || true
+          rm -rf candidate/test/results candidate/test/cypress/screenshots candidate/test/cypress/videos

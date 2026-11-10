@@ -2,6 +2,7 @@ import gravatar from "gravatar";
 import _ from "lodash";
 import errs from "../lib/error.js";
 import utils from "../lib/utils.js";
+import apiTokenModel from "../models/api_token.js";
 import authModel from "../models/auth.js";
 import userModel from "../models/user.js";
 import userPermissionModel from "../models/user_permission.js";
@@ -125,7 +126,17 @@ const internalUser = {
 				}
 
 				data.avatar = gravatar.url(data.email || user.email, { default: "mm" });
-				return userModel.query().patchAndFetchById(user.id, data).then(utils.omitRow(omissions()));
+				return userModel.transaction(async (trx) => {
+					const row = await userModel.query(trx).patchAndFetchById(user.id, data);
+					if (data.is_disabled === true || data.is_disabled === 1) {
+						await apiTokenModel
+							.query(trx)
+							.where("owner_user_id", user.id)
+							.whereNull("revoked_on")
+							.patch({ revoked_on: new Date().toISOString() });
+					}
+					return utils.omitRow(omissions())(row);
+				});
 			})
 			.then(() => {
 				return internalUser.get(access, { id: data.id });
@@ -494,6 +505,7 @@ const internalUser = {
 	 * @param {Integer}  data.id
 	 */
 	loginAs: (access, data) => {
+		if (access.credentialKind === "api_token") return Promise.reject(new errs.PermissionError());
 		return access
 			.can("users:loginas", data.id)
 			.then(() => {
