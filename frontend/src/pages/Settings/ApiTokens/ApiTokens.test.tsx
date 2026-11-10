@@ -79,6 +79,14 @@ afterEach(() => {
 });
 
 describe("Create API token", () => {
+	it("uses the standard admin dialog width with scrollable content", () => {
+		render(<CreateTokenModal options={options} {...callbacks} />);
+		const dialog = screen.getByRole("dialog").querySelector(".modal-dialog");
+		expect(dialog).toHaveClass("modal-dialog-scrollable");
+		expect(dialog).not.toHaveClass("modal-lg");
+		expect(screen.getByLabelText("Token name").closest("form")).toBeTruthy();
+	});
+
 	it("starts with no access and creates only explicitly selected read permissions", async () => {
 		render(<CreateTokenModal options={options} {...callbacks} />);
 		expect(screen.getByRole("button", { name: "Create API Token" })).toBeDisabled();
@@ -88,6 +96,7 @@ describe("Create API token", () => {
 		fillForm();
 		fireEvent.click(screen.getByRole("button", { name: "Create API Token" }));
 		expect(await screen.findByLabelText("Your API token")).toHaveValue(result.token);
+		expect(screen.getByRole("dialog").querySelector(".modal-dialog")).not.toHaveClass("modal-lg");
 		expect(createApiToken).toHaveBeenCalledWith({
 			name: metadata.name,
 			expiresInDays: 30,
@@ -241,7 +250,7 @@ describe("Personal API Tokens page", () => {
 		vi.mocked(getApiTokens).mockResolvedValue([{ ...metadata, revokedOn: "2026-10-14T01:00:00Z" }]);
 		fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Revoke" }));
 		expect(await screen.findByText("Revoked")).toBeVisible();
-		expect(screen.getByRole("button", { name: "Revoke" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Revoke" })).not.toBeInTheDocument();
 		expect(revokeApiToken).toHaveBeenCalledWith(metadata.id);
 	});
 
