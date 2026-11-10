@@ -13,8 +13,8 @@ concurrency:
   group: pat-candidate-verification
   cancel-in-progress: true
 env:
-  SOURCE_COMMIT: 0fa10fc80cd6a836824d85f8b243a5c1bc311195
-  SOURCE_TREE: dbabeb154f3c189fe77d6d210ae22b433729937a
+  SOURCE_COMMIT: 113240a7977be0c9c07d6c0322e39c3100d2a30b
+  SOURCE_TREE: 2fcc75982236a228f45f815e06cf96363dcf14d2
 
 jobs:
   production-runtime:
@@ -65,7 +65,7 @@ jobs:
         timeout-minutes: 5
         run: |
           docker run --rm --network none --entrypoint sh "$IMAGE_ID" -c \
-            'node --test test/api-token-policy.test.js test/api-token-step-up-limit.test.js test/api-token-audit.test.js test/error-diagnostics.test.js test/request-context.test.js'
+            'node --test test/nginx-values.test.js test/api-token-policy.test.js test/api-token-step-up-limit.test.js test/api-token-audit.test.js test/error-diagnostics.test.js test/request-context.test.js'
           output="$(mktemp)"
           trap 'rm -f "$output"' EXIT
           status=0
